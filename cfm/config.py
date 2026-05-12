@@ -5,9 +5,9 @@ autoencoder_input_dim_dict = {'clip_ViT-B16_out': 512,
 
 # paths for the MPI cluster
 data_dir_root = '/scratch/inf0/user/kwittenm/data'  # Kai's pre-computed features
-save_dir_root = '/BS/dniazi_thesis/work/CFM_smoothing/SAE'
-probe_cs_save_dir_root = '/BS/dniazi_thesis/work/CFM_smoothing/probe'
-vocab_dir = '/BS/dniazi_thesis/work/CFM_smoothing/vocab'
+save_dir_root = '/scratch/inf0/user/kwittenm/SAE'  # Kai's SAE checkpoints here
+probe_cs_save_dir_root = '/scratch/inf0/user/kwittenm/probe'  # Kai's linear probes here
+vocab_dir = '/scratch/inf0/user/kwittenm/vocab'
 analysis_dir = '/BS/dniazi_thesis/work/CFM_smoothing/analysis'
 
 probe_dataset_root_dir_dict = {
