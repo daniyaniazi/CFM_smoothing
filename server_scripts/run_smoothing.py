@@ -230,7 +230,7 @@ val_concept_vectors, val_labels = generate_concept_vectors(
 
 
 # ===========================================================================
-# Step 4: Build KNN index on TRAIN concept vectors (cached)
+# Step 4: Subsample train + build Annoy KNN index (cached)
 # ===========================================================================
 print("\n" + "=" * 70)
 print("Building KNN index on TRAIN concept vectors")
@@ -238,14 +238,25 @@ print("=" * 70)
 
 import annoy
 
-index_path = os.path.join(SAVE_DIR, f"knn_concepts_{PROBE_DATASET}_train.ann")
-CONCEPT_DIM = train_concept_vectors.shape[1]
+N_TRAIN_SUBSAMPLE = 200_000  # subsample to avoid OOM
+N_TRAIN_FULL = train_concept_vectors.shape[0]
+
+if N_TRAIN_FULL > N_TRAIN_SUBSAMPLE:
+    np.random.seed(123)
+    subsample_idcs = np.random.choice(N_TRAIN_FULL, size=N_TRAIN_SUBSAMPLE, replace=False)
+    train_concept_vectors = train_concept_vectors[subsample_idcs]
+    train_labels = train_labels[subsample_idcs]
+    print(f"Subsampled train: {N_TRAIN_FULL} -> {N_TRAIN_SUBSAMPLE}", flush=True)
+
 N_TRAIN = train_concept_vectors.shape[0]
+CONCEPT_DIM = train_concept_vectors.shape[1]
+
+index_path = os.path.join(SAVE_DIR, f"knn_concepts_{PROBE_DATASET}_train_{N_TRAIN}.ann")
 
 if os.path.exists(index_path):
     knn_index = annoy.AnnoyIndex(CONCEPT_DIM, 'euclidean')
     knn_index.load(index_path)
-    print(f"Loaded existing KNN index from {index_path}")
+    print(f"Loaded existing KNN index from {index_path}", flush=True)
 else:
     import time as _time
     knn_index = annoy.AnnoyIndex(CONCEPT_DIM, 'euclidean')
@@ -253,13 +264,13 @@ else:
     t0 = _time.time()
     for i in range(N_TRAIN):
         knn_index.add_item(i, train_concept_vectors[i].numpy())
-        if (i + 1) % 200000 == 0:
+        if (i + 1) % 50000 == 0:
             print(f"  added {i+1}/{N_TRAIN} items ({_time.time()-t0:.0f}s)", flush=True)
     N_TREES = 10
-    print(f"Building index with {N_TREES} trees (this may take 10-20 min)...", flush=True)
+    print(f"Building index with {N_TREES} trees...", flush=True)
     knn_index.build(N_TREES)
     knn_index.save(index_path)
-    print(f"Built Annoy index: {N_TRAIN} train vectors, dim={CONCEPT_DIM}, trees={N_TREES} "
+    print(f"Built Annoy index: {N_TRAIN} vectors, dim={CONCEPT_DIM}, trees={N_TREES} "
           f"in {(_time.time()-t0)/60:.1f}min", flush=True)
 
 
@@ -308,7 +319,7 @@ for loop_i, target_idx in enumerate(TARGET_IDCS):
     # Save input image path (and copy image if possible)
     img_path = get_image_path(probe_val_dataset, target_idx)
 
-    # KNN neighbors from TRAIN index (query by vector, not by item)
+    # KNN neighbors from TRAIN index (query by vector)
     nn_idcs = knn_index.get_nns_by_vector(cv_orig.tolist(), K_NEIGHBORS)
     X_neighbors = np.stack([train_concept_vectors[i].numpy() for i in nn_idcs])
 
