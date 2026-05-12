@@ -115,13 +115,17 @@ cfm_model.eval()
 print("CFM model ready")
 
 # Concept names (optional)
-concept_name_save_path = os.path.join(
-    str(args.save_dir_sae_ckpts['img']),
-    args.save_suffix,
-    args.config_name,
-    'trainer_0',
-    'concept_names.txt'
-)
+# Try override path first (avoids bracket issues in Kai's SAE path)
+from cfm import config as cfg
+concept_name_save_path = getattr(cfg, 'concept_names_override', None)
+if not concept_name_save_path or not os.path.exists(concept_name_save_path):
+    concept_name_save_path = os.path.join(
+        str(args.save_dir_sae_ckpts['img']),
+        args.save_suffix,
+        args.config_name,
+        'trainer_0',
+        'concept_names.txt'
+    )
 if os.path.exists(concept_name_save_path):
     with open(concept_name_save_path, "r") as f:
         concept_names = [line.strip() for line in f.readlines()]

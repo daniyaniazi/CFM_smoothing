@@ -10,6 +10,9 @@ probe_cs_save_dir_root = '/scratch/inf0/user/kwittenm/probe'  # Kai's linear pro
 vocab_dir = '/scratch/inf0/user/kwittenm/vocab'
 analysis_dir = '/BS/dniazi_thesis/work/CFM_smoothing/analysis'
 
+# Override path for concept_names.txt 
+concept_names_override = '/BS/dniazi_thesis/work/cfm_data/concept_names.txt'
+
 probe_dataset_root_dir_dict = {
     "places365": "/BS/CC3M/static00/Places365Standard", 
     "imagenet": "/scratch/inf0/user/mparcham/ILSVRC2012", 
