@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #SBATCH -p gpu20
-#SBATCH -t 04:00:00
+#SBATCH -t 12:00:00
 #SBATCH --gres gpu:1
 #SBATCH -c 8
 #SBATCH --mem-per-cpu=8G
