@@ -3,7 +3,7 @@
 #SBATCH -t 12:00:00
 #SBATCH --gres gpu:1
 #SBATCH -c 8
-#SBATCH --mem-per-cpu=8G
+#SBATCH --mem-per-cpu=16G
 #SBATCH -o /BS/dniazi_thesis/work/CFM_smoothing/output/slurm/smoothing-%j.out
 #SBATCH -e /BS/dniazi_thesis/work/CFM_smoothing/output/slurm/smoothing-%j.err
 #SBATCH -J cfm-smoothing

@@ -51,7 +51,8 @@ PROBE_CONFIG = "lr0.0001_bs512_epo50_clCE_spL1_spl0.0max_no_threshold"
 K_NEIGHBORS = 500
 SCALE_WEIGHT = 0.7
 N_SMOOTH_SAMPLES = 100
-TARGET_IDCS = [100, 51, 42, 200, 500]
+N_TARGETS = 500           # number of val images to certify
+N_VIZ = 10                # save detailed viz/JSON only for the first N images
 
 # Data generation
 BATCH_SIZE = 64
@@ -192,19 +193,24 @@ def generate_concept_vectors(dataset, split_name, save_dir, cfm_model, device, b
         labels = torch.load(labels_path)
         print(f"Loaded {vectors.shape[0]} {split_name} vectors from {cv_path}")
     else:
-        print(f"\nGenerating {split_name} concept vectors (this takes a while)")
+        print(f"\nGenerating {split_name} concept vectors (this takes a while)", flush=True)
         loader = DataLoader(dataset, batch_size=batch_size,
                             shuffle=False, num_workers=num_workers, pin_memory=True)
         all_vecs = []
         all_labs = []
+        import time as _time
+        t0 = _time.time()
         with torch.no_grad():
             for batch_idx, (imgs, labs) in enumerate(loader):
                 imgs = imgs.to(device)
                 cvs = cfm_model.get_aggregated_concept_activations(imgs)
                 all_vecs.append(cvs.cpu())
                 all_labs.append(labs)
-                if (batch_idx + 1) % 50 == 0:
-                    print(f"  {split_name} batch {batch_idx+1}/{len(loader)}")
+                if (batch_idx + 1) % 100 == 0:
+                    elapsed = _time.time() - t0
+                    eta = elapsed / (batch_idx + 1) * (len(loader) - batch_idx - 1)
+                    print(f"  {split_name} batch {batch_idx+1}/{len(loader)}  "
+                          f"elapsed {elapsed/60:.1f}min  ETA {eta/60:.1f}min", flush=True)
         vectors = torch.cat(all_vecs, dim=0)
         labels = torch.cat(all_labs, dim=0)
         torch.save(vectors, cv_path)
@@ -241,13 +247,20 @@ if os.path.exists(index_path):
     knn_index.load(index_path)
     print(f"Loaded existing KNN index from {index_path}")
 else:
+    import time as _time
     knn_index = annoy.AnnoyIndex(CONCEPT_DIM, 'euclidean')
+    print(f"Adding {N_TRAIN} items to index...", flush=True)
+    t0 = _time.time()
     for i in range(N_TRAIN):
         knn_index.add_item(i, train_concept_vectors[i].numpy())
-    N_TREES = 50
+        if (i + 1) % 200000 == 0:
+            print(f"  added {i+1}/{N_TRAIN} items ({_time.time()-t0:.0f}s)", flush=True)
+    N_TREES = 10
+    print(f"Building index with {N_TREES} trees (this may take 10-20 min)...", flush=True)
     knn_index.build(N_TREES)
     knn_index.save(index_path)
-    print(f"Built Annoy index: {N_TRAIN} train vectors, dim={CONCEPT_DIM}, trees={N_TREES}")
+    print(f"Built Annoy index: {N_TRAIN} train vectors, dim={CONCEPT_DIM}, trees={N_TREES} "
+          f"in {(_time.time()-t0)/60:.1f}min", flush=True)
 
 
 # ===========================================================================
@@ -281,7 +294,12 @@ isotropic_dir = os.path.join(SAVE_DIR, f"isotropic_{PROBE_DATASET}")
 os.makedirs(manifold_dir, exist_ok=True)
 os.makedirs(isotropic_dir, exist_ok=True)
 
-for target_idx in TARGET_IDCS:
+np.random.seed(42)
+TARGET_IDCS = np.random.choice(len(val_concept_vectors), size=N_TARGETS, replace=False).tolist()
+print(f"Certifying {N_TARGETS} val images (saving viz for first {N_VIZ})")
+viz_count = 0
+
+for loop_i, target_idx in enumerate(TARGET_IDCS):
     cv_orig = val_concept_vectors[target_idx].numpy()
     label_true = val_labels[target_idx].item()
     pred_orig = classify_concept_vector(
@@ -364,43 +382,8 @@ for target_idx in TARGET_IDCS:
     cv_smoothed_avg = cv_smoothed_accum / N_SMOOTH_SAMPLES
     final_concepts = get_top_concept_info(cv_smoothed_avg, concept_names, top_k=20)
 
-    # --- Print summary ---
-    orig_concepts = get_top_concept_info(cv_orig, concept_names, top_k=20)
-
-    print("\n" + "-" * 70)
-    print(f"Image idx={target_idx}  |  path: {img_path}")
-    print(f"  True class:     {get_class_name(PROBE_DATASET, label_true)}")
-    print(f"  Original pred:  {get_class_name(PROBE_DATASET, pred_orig)}")
-    print(f"  Smoothed pred:  {get_class_name(PROBE_DATASET, pred_smooth)} "
-          f"({n_votes}/{N_SMOOTH_SAMPLES} votes)")
-    print(f"  Prediction stable: {pred_orig == pred_smooth}")
-    print(f"  Mean top-20 concept overlap: {np.mean(smooth_concepts_overlap):.3f}")
-
-    print(f"\n  ORIGINAL top-20 concepts:")
-    for name, val in orig_concepts:
-        print(f"    {name:30s} {val:.4f}")
-
-    print(f"\n  TOP 5 NEIGHBORS:")
-    for nb in top5_neighbors_info:
-        print(f"    #{nb['rank']} idx={nb['dataset_idx']}  "
-              f"class={nb['true_class']}  pred={nb['pred_class']}")
-        for c in nb['top_concepts'][:20]:
-            print(f"        {c['name']:30s} {c['value']:.4f}")
-
-    print(f"\n  5 EXAMPLE NOISY SAMPLES:")
-    for s in example_noisy_samples:
-        print(f"    Sample {s['sample_idx']}  pred={s['pred_class']}  "
-              f"overlap={s['top20_overlap']}")
-        for c in s['top_concepts'][:20]:
-            print(f"        {c['name']:30s} {c['value']:.4f}")
-
-    print(f"\n  FINAL AVERAGED CONCEPTS (after {N_SMOOTH_SAMPLES}x smoothing):")
-    for name, val in final_concepts:
-        print(f"    {name:30s} {val:.4f}")
-
     # --- Baseline: Isotropic Gaussian smoothing (no manifold) ---
-    # Same noise scale but applied directly in concept space
-    gauss_sigma = SCALE_WEIGHT * np.sqrt(np.mean(ev))  # scale to match manifold noise magnitude
+    gauss_sigma = SCALE_WEIGHT * np.sqrt(np.mean(ev))
     gauss_preds = []
     gauss_overlap = []
     gauss_example_samples = []
@@ -408,16 +391,13 @@ for target_idx in TARGET_IDCS:
     for sample_i in range(N_SMOOTH_SAMPLES):
         noise = np.random.normal(0, gauss_sigma, size=cv_orig.shape)
         cv_gauss = cv_orig + noise
-
         pred_g = classify_concept_vector(
             torch.tensor(cv_gauss, dtype=torch.float32, device=args.device),
             classifier_weights)
         gauss_preds.append(pred_g)
-
         gauss_top = set(np.argsort(-cv_gauss)[:20])
         g_overlap = len(orig_top & gauss_top) / 20.0
         gauss_overlap.append(g_overlap)
-
         if sample_i < 5:
             g_concepts = get_top_concept_info(cv_gauss, concept_names, top_k=20)
             gauss_example_samples.append({
@@ -430,7 +410,6 @@ for target_idx in TARGET_IDCS:
     gauss_vote_counts = Counter(gauss_preds)
     pred_gauss, n_votes_gauss = gauss_vote_counts.most_common(1)[0]
 
-    # Average Gaussian smoothed vector
     cv_gauss_accum = np.zeros_like(cv_orig)
     for _ in range(N_SMOOTH_SAMPLES):
         noise = np.random.normal(0, gauss_sigma, size=cv_orig.shape)
@@ -438,240 +417,271 @@ for target_idx in TARGET_IDCS:
     cv_gauss_avg = cv_gauss_accum / N_SMOOTH_SAMPLES
     gauss_final_concepts = get_top_concept_info(cv_gauss_avg, concept_names, top_k=20)
 
-    print(f"\n  --- BASELINE: Isotropic Gaussian (σ={gauss_sigma:.4f}) ---")
-    print(f"  Gaussian pred:  {get_class_name(PROBE_DATASET, pred_gauss)} "
-          f"({n_votes_gauss}/{N_SMOOTH_SAMPLES} votes)")
-    print(f"  Gaussian stable: {pred_orig == pred_gauss}")
-    print(f"  Gaussian mean top-20 overlap: {np.mean(gauss_overlap):.3f}")
-    print(f"  5 EXAMPLE GAUSSIAN SAMPLES:")
-    for s in gauss_example_samples:
-        print(f"    Sample {s['sample_idx']}  pred={s['pred_class']}  "
-              f"overlap={s['top20_overlap']}")
-        for c in s['top_concepts'][:5]:
-            print(f"        {c['name']:30s} {c['value']:.4f}")
-    print(f"  GAUSSIAN AVERAGED top-20 concepts:")
-    for name, val in gauss_final_concepts:
-        print(f"    {name:30s} {val:.4f}")
+    # --- Print ---
+    orig_concepts = get_top_concept_info(cv_orig, concept_names, top_k=20)
+    save_viz = (viz_count < N_VIZ)
+
+    print(f"\n[{loop_i+1}/{N_TARGETS}] idx={target_idx}  "
+          f"true={get_class_name(PROBE_DATASET, label_true)}  "
+          f"orig={get_class_name(PROBE_DATASET, pred_orig)}  "
+          f"manifold={get_class_name(PROBE_DATASET, pred_smooth)}({n_votes}/{N_SMOOTH_SAMPLES})  "
+          f"gauss={get_class_name(PROBE_DATASET, pred_gauss)}({n_votes_gauss}/{N_SMOOTH_SAMPLES})  "
+          f"m_stable={pred_orig == pred_smooth}  g_stable={pred_orig == pred_gauss}")
+
+    if save_viz:
+        print(f"\n  ORIGINAL top-20 concepts:")
+        for name, val in orig_concepts:
+            print(f"    {name:30s} {val:.4f}")
+
+        print(f"\n  TOP 5 NEIGHBORS:")
+        for nb in top5_neighbors_info:
+            print(f"    #{nb['rank']} idx={nb['dataset_idx']}  "
+                  f"class={nb['true_class']}  pred={nb['pred_class']}")
+            for c in nb['top_concepts'][:20]:
+                print(f"        {c['name']:30s} {c['value']:.4f}")
+
+        print(f"\n  5 EXAMPLE NOISY SAMPLES:")
+        for s in example_noisy_samples:
+            print(f"    Sample {s['sample_idx']}  pred={s['pred_class']}  "
+                  f"overlap={s['top20_overlap']}")
+            for c in s['top_concepts'][:20]:
+                print(f"        {c['name']:30s} {c['value']:.4f}")
+
+        print(f"\n  FINAL AVERAGED CONCEPTS (after {N_SMOOTH_SAMPLES}x smoothing):")
+        for name, val in final_concepts:
+            print(f"    {name:30s} {val:.4f}")
+
+        print(f"\n  --- BASELINE: Isotropic Gaussian (σ={gauss_sigma:.4f}) ---")
+        print(f"  5 EXAMPLE GAUSSIAN SAMPLES:")
+        for s in gauss_example_samples:
+            print(f"    Sample {s['sample_idx']}  pred={s['pred_class']}  "
+                  f"overlap={s['top20_overlap']}")
+            for c in s['top_concepts'][:5]:
+                print(f"        {c['name']:30s} {c['value']:.4f}")
+        print(f"  GAUSSIAN AVERAGED top-20 concepts:")
+        for name, val in gauss_final_concepts:
+            print(f"    {name:30s} {val:.4f}")
 
     # ===================================================================
-    # Save MANIFOLD results: JSON + visualization
+    # Save detailed viz + JSON only for first N_VIZ images
     # ===================================================================
-    # --- Manifold visualization ---
-    fig, axes = plt.subplots(1, 3, figsize=(24, 8))
+    if save_viz:
+        # --- Manifold visualization ---
+        fig, axes = plt.subplots(1, 3, figsize=(24, 8))
 
-    pca_vis = PCA(n_components=2)
-    X_vis = pca_vis.fit_transform(X_neighbors)
-    orig_vis = pca_vis.transform(cv_orig.reshape(1, -1))[0]
-    mean_vis = pca_vis.transform(mean_nn.reshape(1, -1))[0]
+        pca_vis = PCA(n_components=2)
+        X_vis = pca_vis.fit_transform(X_neighbors)
+        orig_vis = pca_vis.transform(cv_orig.reshape(1, -1))[0]
+        mean_vis = pca_vis.transform(mean_nn.reshape(1, -1))[0]
 
-    vis_noisy_points = []
-    vis_noisy_preds = []
-    for _ in range(N_SMOOTH_SAMPLES):
-        noise = np.random.normal(0, SCALE_WEIGHT, size=len(ev))
-        cv_noised = cv_whitened + noise
-        cv_s = cv_noised @ (np.sqrt(ev)[:, None] * Vt) + mean_nn
-        vis_noisy_points.append(cv_s)
-        p = classify_concept_vector(
-            torch.tensor(cv_s, dtype=torch.float32, device=args.device),
-            classifier_weights)
-        vis_noisy_preds.append(p)
-    noisy_vis = pca_vis.transform(np.stack(vis_noisy_points))
-    noisy_correct = [p == label_true for p in vis_noisy_preds]
+        vis_noisy_points = []
+        vis_noisy_preds = []
+        for _ in range(N_SMOOTH_SAMPLES):
+            noise = np.random.normal(0, SCALE_WEIGHT, size=len(ev))
+            cv_noised = cv_whitened + noise
+            cv_s = cv_noised @ (np.sqrt(ev)[:, None] * Vt) + mean_nn
+            vis_noisy_points.append(cv_s)
+            p = classify_concept_vector(
+                torch.tensor(cv_s, dtype=torch.float32, device=args.device),
+                classifier_weights)
+            vis_noisy_preds.append(p)
+        noisy_vis = pca_vis.transform(np.stack(vis_noisy_points))
+        noisy_correct = [p == label_true for p in vis_noisy_preds]
 
-    # Panel 1: Manifold neighborhood
-    ax = axes[0]
-    ax.scatter(X_vis[:, 0], X_vis[:, 1], c='lightblue', s=8, alpha=0.4, label=f'{K_NEIGHBORS} KNN neighbors')
-    for rank in range(min(5, len(nn_idcs))):
-        nn_cv_vis = pca_vis.transform(train_concept_vectors[nn_idcs[rank]].numpy().reshape(1, -1))[0]
-        ax.scatter(nn_cv_vis[0], nn_cv_vis[1], c='blue', s=80, marker='D', zorder=5,
-                   edgecolors='darkblue', linewidths=1.5)
-        ax.annotate(f'N{rank+1}', (nn_cv_vis[0], nn_cv_vis[1]), fontsize=8, fontweight='bold',
-                    xytext=(5, 5), textcoords='offset points')
-    ax.scatter(orig_vis[0], orig_vis[1], c='red', s=200, marker='*', zorder=10,
-               edgecolors='darkred', linewidths=1.5, label='Target')
-    ax.scatter(mean_vis[0], mean_vis[1], c='green', s=100, marker='X', zorder=10,
-               edgecolors='darkgreen', linewidths=1.5, label='Neighborhood mean')
-    ax.set_title(f'Manifold Neighborhood (2D PCA)\nidx={target_idx}, True: {get_class_name(PROBE_DATASET, label_true)}',
-                 fontsize=12, fontweight='bold')
-    ax.set_xlabel('PC1'); ax.set_ylabel('PC2'); ax.legend(fontsize=9); ax.grid(True, alpha=0.3)
+        # Panel 1: Manifold neighborhood
+        ax = axes[0]
+        ax.scatter(X_vis[:, 0], X_vis[:, 1], c='lightblue', s=8, alpha=0.4, label=f'{K_NEIGHBORS} KNN neighbors')
+        for rank in range(min(5, len(nn_idcs))):
+            nn_cv_vis = pca_vis.transform(train_concept_vectors[nn_idcs[rank]].numpy().reshape(1, -1))[0]
+            ax.scatter(nn_cv_vis[0], nn_cv_vis[1], c='blue', s=80, marker='D', zorder=5,
+                       edgecolors='darkblue', linewidths=1.5)
+            ax.annotate(f'N{rank+1}', (nn_cv_vis[0], nn_cv_vis[1]), fontsize=8, fontweight='bold',
+                        xytext=(5, 5), textcoords='offset points')
+        ax.scatter(orig_vis[0], orig_vis[1], c='red', s=200, marker='*', zorder=10,
+                   edgecolors='darkred', linewidths=1.5, label='Target')
+        ax.scatter(mean_vis[0], mean_vis[1], c='green', s=100, marker='X', zorder=10,
+                   edgecolors='darkgreen', linewidths=1.5, label='Neighborhood mean')
+        ax.set_title(f'Manifold Neighborhood (2D PCA)\nidx={target_idx}, True: {get_class_name(PROBE_DATASET, label_true)}',
+                     fontsize=12, fontweight='bold')
+        ax.set_xlabel('PC1'); ax.set_ylabel('PC2'); ax.legend(fontsize=9); ax.grid(True, alpha=0.3)
 
-    # Panel 2: Manifold noisy samples
-    ax = axes[1]
-    ax.scatter(X_vis[:, 0], X_vis[:, 1], c='lightgray', s=5, alpha=0.2)
-    colors = ['green' if c else 'orange' for c in noisy_correct]
-    ax.scatter(noisy_vis[:, 0], noisy_vis[:, 1], c=colors, s=15, alpha=0.6,
-               label=f'{N_SMOOTH_SAMPLES} manifold samples')
-    ax.scatter(orig_vis[0], orig_vis[1], c='red', s=200, marker='*', zorder=10,
-               edgecolors='darkred', linewidths=1.5, label='Original')
-    cov = np.cov(noisy_vis.T)
-    eigenvalues, eigenvectors = np.linalg.eigh(cov)
-    angle = np.degrees(np.arctan2(eigenvectors[1, 1], eigenvectors[0, 1]))
-    for n_std in [1, 2]:
-        ell = Ellipse(xy=noisy_vis.mean(axis=0), width=2*n_std*np.sqrt(eigenvalues[1]),
-                      height=2*n_std*np.sqrt(eigenvalues[0]), angle=angle,
-                      fill=False, edgecolor='purple', linestyle='--', linewidth=1.5, alpha=0.6)
-        ax.add_patch(ell)
-    n_correct = sum(noisy_correct)
-    ax.set_title(f'Manifold Samples (σ={SCALE_WEIGHT})\nCorrect: {n_correct}/{N_SMOOTH_SAMPLES}',
-                 fontsize=12, fontweight='bold')
-    ax.set_xlabel('PC1'); ax.set_ylabel('PC2'); ax.legend(fontsize=9); ax.grid(True, alpha=0.3)
+        # Panel 2: Manifold noisy samples
+        ax = axes[1]
+        ax.scatter(X_vis[:, 0], X_vis[:, 1], c='lightgray', s=5, alpha=0.2)
+        colors = ['green' if c else 'orange' for c in noisy_correct]
+        ax.scatter(noisy_vis[:, 0], noisy_vis[:, 1], c=colors, s=15, alpha=0.6,
+                   label=f'{N_SMOOTH_SAMPLES} manifold samples')
+        ax.scatter(orig_vis[0], orig_vis[1], c='red', s=200, marker='*', zorder=10,
+                   edgecolors='darkred', linewidths=1.5, label='Original')
+        cov = np.cov(noisy_vis.T)
+        eigenvalues, eigenvectors = np.linalg.eigh(cov)
+        angle = np.degrees(np.arctan2(eigenvectors[1, 1], eigenvectors[0, 1]))
+        for n_std in [1, 2]:
+            ell = Ellipse(xy=noisy_vis.mean(axis=0), width=2*n_std*np.sqrt(eigenvalues[1]),
+                          height=2*n_std*np.sqrt(eigenvalues[0]), angle=angle,
+                          fill=False, edgecolor='purple', linestyle='--', linewidth=1.5, alpha=0.6)
+            ax.add_patch(ell)
+        n_correct = sum(noisy_correct)
+        ax.set_title(f'Manifold Samples (σ={SCALE_WEIGHT})\nCorrect: {n_correct}/{N_SMOOTH_SAMPLES}',
+                     fontsize=12, fontweight='bold')
+        ax.set_xlabel('PC1'); ax.set_ylabel('PC2'); ax.legend(fontsize=9); ax.grid(True, alpha=0.3)
 
-    # Panel 3: Manifold concept bar chart
-    ax = axes[2]
-    n_show = 20
-    orig_top_concepts = get_top_concept_info(cv_orig, concept_names, top_k=n_show)
-    final_top_concepts = get_top_concept_info(cv_smoothed_avg, concept_names, top_k=n_show)
-    all_names = []
-    for n, _ in orig_top_concepts:
-        if n not in all_names: all_names.append(n)
-    for n, _ in final_top_concepts:
-        if n not in all_names: all_names.append(n)
-    all_names = all_names[:30]
-    orig_dict = {n: v for n, v in orig_top_concepts}
-    final_dict = {n: v for n, v in final_top_concepts}
-    y_pos = np.arange(len(all_names))
-    ax.barh(y_pos - 0.2, [orig_dict.get(n, 0) for n in all_names], height=0.35, color='steelblue', label='Original', alpha=0.8)
-    ax.barh(y_pos + 0.2, [final_dict.get(n, 0) for n in all_names], height=0.35, color='coral', label=f'Manifold avg', alpha=0.8)
-    ax.set_yticks(y_pos); ax.set_yticklabels([n[:25] for n in all_names], fontsize=9)
-    ax.invert_yaxis(); ax.set_xlabel('Activation')
-    ax.set_title(f'Manifold: {get_class_name(PROBE_DATASET, pred_orig)} → '
-                 f'{get_class_name(PROBE_DATASET, pred_smooth)} '
-                 f'({"STABLE ✓" if pred_orig == pred_smooth else "CHANGED ✗"})',
-                 fontsize=12, fontweight='bold')
-    ax.legend(fontsize=9); ax.grid(True, axis='x', alpha=0.3)
-    plt.tight_layout()
-    plt.savefig(os.path.join(manifold_dir, f"idx{target_idx}_manifold.png"), dpi=150, bbox_inches='tight')
-    plt.close(fig)
+        # Panel 3: Manifold concept bar chart
+        ax = axes[2]
+        n_show = 20
+        orig_top_concepts = get_top_concept_info(cv_orig, concept_names, top_k=n_show)
+        final_top_concepts = get_top_concept_info(cv_smoothed_avg, concept_names, top_k=n_show)
+        all_names = []
+        for n, _ in orig_top_concepts:
+            if n not in all_names: all_names.append(n)
+        for n, _ in final_top_concepts:
+            if n not in all_names: all_names.append(n)
+        all_names = all_names[:30]
+        orig_dict = {n: v for n, v in orig_top_concepts}
+        final_dict = {n: v for n, v in final_top_concepts}
+        y_pos = np.arange(len(all_names))
+        ax.barh(y_pos - 0.2, [orig_dict.get(n, 0) for n in all_names], height=0.35, color='steelblue', label='Original', alpha=0.8)
+        ax.barh(y_pos + 0.2, [final_dict.get(n, 0) for n in all_names], height=0.35, color='coral', label=f'Manifold avg', alpha=0.8)
+        ax.set_yticks(y_pos); ax.set_yticklabels([n[:25] for n in all_names], fontsize=9)
+        ax.invert_yaxis(); ax.set_xlabel('Activation')
+        ax.set_title(f'Manifold: {get_class_name(PROBE_DATASET, pred_orig)} → '
+                     f'{get_class_name(PROBE_DATASET, pred_smooth)} '
+                     f'({"STABLE ✓" if pred_orig == pred_smooth else "CHANGED ✗"})',
+                     fontsize=12, fontweight='bold')
+        ax.legend(fontsize=9); ax.grid(True, axis='x', alpha=0.3)
+        plt.tight_layout()
+        plt.savefig(os.path.join(manifold_dir, f"idx{target_idx}_manifold.png"), dpi=150, bbox_inches='tight')
+        plt.close(fig)
 
-    # Manifold JSON
-    manifold_result = {
-        'idx': target_idx,
-        'image_path': img_path,
-        'true_class': get_class_name(PROBE_DATASET, label_true),
-        'label_true': label_true,
-        'method': 'manifold',
-        'pred_orig': pred_orig,
-        'pred_orig_class': get_class_name(PROBE_DATASET, pred_orig),
-        'pred_smooth': pred_smooth,
-        'pred_smooth_class': get_class_name(PROBE_DATASET, pred_smooth),
-        'n_votes': n_votes,
-        'stable': pred_orig == pred_smooth,
-        'mean_overlap': round(float(np.mean(smooth_concepts_overlap)), 4),
-        'params': {'K_NEIGHBORS': K_NEIGHBORS, 'SCALE_WEIGHT': SCALE_WEIGHT, 'N_SMOOTH_SAMPLES': N_SMOOTH_SAMPLES},
-        'original_concepts': [{'name': n, 'value': round(v, 4)} for n, v in orig_concepts],
-        'top5_neighbors': top5_neighbors_info,
-        'example_noisy_samples': example_noisy_samples,
-        'final_avg_concepts': [{'name': n, 'value': round(v, 4)} for n, v in final_concepts],
-    }
-    with open(os.path.join(manifold_dir, f"idx{target_idx}_detail.json"), 'w') as f:
-        json.dump(manifold_result, f, indent=2)
+        # Manifold JSON
+        manifold_result = {
+            'idx': target_idx,
+            'image_path': img_path,
+            'true_class': get_class_name(PROBE_DATASET, label_true),
+            'label_true': label_true,
+            'method': 'manifold',
+            'pred_orig': pred_orig,
+            'pred_orig_class': get_class_name(PROBE_DATASET, pred_orig),
+            'pred_smooth': pred_smooth,
+            'pred_smooth_class': get_class_name(PROBE_DATASET, pred_smooth),
+            'n_votes': n_votes,
+            'stable': pred_orig == pred_smooth,
+            'mean_overlap': round(float(np.mean(smooth_concepts_overlap)), 4),
+            'params': {'K_NEIGHBORS': K_NEIGHBORS, 'SCALE_WEIGHT': SCALE_WEIGHT, 'N_SMOOTH_SAMPLES': N_SMOOTH_SAMPLES},
+            'original_concepts': [{'name': n, 'value': round(v, 4)} for n, v in orig_concepts],
+            'top5_neighbors': top5_neighbors_info,
+            'example_noisy_samples': example_noisy_samples,
+            'final_avg_concepts': [{'name': n, 'value': round(v, 4)} for n, v in final_concepts],
+        }
+        with open(os.path.join(manifold_dir, f"idx{target_idx}_detail.json"), 'w') as f:
+            json.dump(manifold_result, f, indent=2)
 
-    # ===================================================================
-    # Save ISOTROPIC results: JSON + visualization
-    # ===================================================================
-    # --- Isotropic visualization ---
-    fig, axes = plt.subplots(1, 3, figsize=(24, 8))
+        # --- Isotropic visualization ---
+        fig, axes = plt.subplots(1, 3, figsize=(24, 8))
 
-    # Generate isotropic noisy points for visualization (project onto same PCA)
-    vis_gauss_points = []
-    vis_gauss_preds_list = []
-    for _ in range(N_SMOOTH_SAMPLES):
-        noise = np.random.normal(0, gauss_sigma, size=cv_orig.shape)
-        cv_g = cv_orig + noise
-        vis_gauss_points.append(cv_g)
-        p = classify_concept_vector(
-            torch.tensor(cv_g, dtype=torch.float32, device=args.device),
-            classifier_weights)
-        vis_gauss_preds_list.append(p)
-    gauss_vis = pca_vis.transform(np.stack(vis_gauss_points))
-    gauss_correct = [p == label_true for p in vis_gauss_preds_list]
+        # Generate isotropic noisy points for visualization (project onto same PCA)
+        vis_gauss_points = []
+        vis_gauss_preds_list = []
+        for _ in range(N_SMOOTH_SAMPLES):
+            noise = np.random.normal(0, gauss_sigma, size=cv_orig.shape)
+            cv_g = cv_orig + noise
+            vis_gauss_points.append(cv_g)
+            p = classify_concept_vector(
+                torch.tensor(cv_g, dtype=torch.float32, device=args.device),
+                classifier_weights)
+            vis_gauss_preds_list.append(p)
+        gauss_vis = pca_vis.transform(np.stack(vis_gauss_points))
+        gauss_correct = [p == label_true for p in vis_gauss_preds_list]
 
-    # Panel 1: Same neighborhood for reference
-    ax = axes[0]
-    ax.scatter(X_vis[:, 0], X_vis[:, 1], c='lightblue', s=8, alpha=0.4, label=f'{K_NEIGHBORS} KNN neighbors')
-    ax.scatter(orig_vis[0], orig_vis[1], c='red', s=200, marker='*', zorder=10,
-               edgecolors='darkred', linewidths=1.5, label='Target')
-    ax.set_title(f'Concept Space (2D PCA)\nidx={target_idx}, True: {get_class_name(PROBE_DATASET, label_true)}',
-                 fontsize=12, fontweight='bold')
-    ax.set_xlabel('PC1'); ax.set_ylabel('PC2'); ax.legend(fontsize=9); ax.grid(True, alpha=0.3)
+        # Panel 1: Same neighborhood for reference
+        ax = axes[0]
+        ax.scatter(X_vis[:, 0], X_vis[:, 1], c='lightblue', s=8, alpha=0.4, label=f'{K_NEIGHBORS} KNN neighbors')
+        ax.scatter(orig_vis[0], orig_vis[1], c='red', s=200, marker='*', zorder=10,
+                   edgecolors='darkred', linewidths=1.5, label='Target')
+        ax.set_title(f'Concept Space (2D PCA)\nidx={target_idx}, True: {get_class_name(PROBE_DATASET, label_true)}',
+                     fontsize=12, fontweight='bold')
+        ax.set_xlabel('PC1'); ax.set_ylabel('PC2'); ax.legend(fontsize=9); ax.grid(True, alpha=0.3)
 
-    # Panel 2: Isotropic Gaussian noisy samples
-    ax = axes[1]
-    ax.scatter(X_vis[:, 0], X_vis[:, 1], c='lightgray', s=5, alpha=0.2)
-    colors_g = ['green' if c else 'orange' for c in gauss_correct]
-    ax.scatter(gauss_vis[:, 0], gauss_vis[:, 1], c=colors_g, s=15, alpha=0.6,
-               label=f'{N_SMOOTH_SAMPLES} isotropic samples')
-    ax.scatter(orig_vis[0], orig_vis[1], c='red', s=200, marker='*', zorder=10,
-               edgecolors='darkred', linewidths=1.5, label='Original')
-    cov_g = np.cov(gauss_vis.T)
-    ev_g, evec_g = np.linalg.eigh(cov_g)
-    angle_g = np.degrees(np.arctan2(evec_g[1, 1], evec_g[0, 1]))
-    for n_std in [1, 2]:
-        ell = Ellipse(xy=gauss_vis.mean(axis=0), width=2*n_std*np.sqrt(ev_g[1]),
-                      height=2*n_std*np.sqrt(ev_g[0]), angle=angle_g,
-                      fill=False, edgecolor='purple', linestyle='--', linewidth=1.5, alpha=0.6)
-        ax.add_patch(ell)
-    n_correct_g = sum(gauss_correct)
-    ax.set_title(f'Isotropic Gaussian (σ={gauss_sigma:.3f})\nCorrect: {n_correct_g}/{N_SMOOTH_SAMPLES}',
-                 fontsize=12, fontweight='bold')
-    ax.set_xlabel('PC1'); ax.set_ylabel('PC2'); ax.legend(fontsize=9); ax.grid(True, alpha=0.3)
+        # Panel 2: Isotropic Gaussian noisy samples
+        ax = axes[1]
+        ax.scatter(X_vis[:, 0], X_vis[:, 1], c='lightgray', s=5, alpha=0.2)
+        colors_g = ['green' if c else 'orange' for c in gauss_correct]
+        ax.scatter(gauss_vis[:, 0], gauss_vis[:, 1], c=colors_g, s=15, alpha=0.6,
+                   label=f'{N_SMOOTH_SAMPLES} isotropic samples')
+        ax.scatter(orig_vis[0], orig_vis[1], c='red', s=200, marker='*', zorder=10,
+                   edgecolors='darkred', linewidths=1.5, label='Original')
+        cov_g = np.cov(gauss_vis.T)
+        ev_g, evec_g = np.linalg.eigh(cov_g)
+        angle_g = np.degrees(np.arctan2(evec_g[1, 1], evec_g[0, 1]))
+        for n_std in [1, 2]:
+            ell = Ellipse(xy=gauss_vis.mean(axis=0), width=2*n_std*np.sqrt(ev_g[1]),
+                          height=2*n_std*np.sqrt(ev_g[0]), angle=angle_g,
+                          fill=False, edgecolor='purple', linestyle='--', linewidth=1.5, alpha=0.6)
+            ax.add_patch(ell)
+        n_correct_g = sum(gauss_correct)
+        ax.set_title(f'Isotropic Gaussian (σ={gauss_sigma:.3f})\nCorrect: {n_correct_g}/{N_SMOOTH_SAMPLES}',
+                     fontsize=12, fontweight='bold')
+        ax.set_xlabel('PC1'); ax.set_ylabel('PC2'); ax.legend(fontsize=9); ax.grid(True, alpha=0.3)
 
-    # Panel 3: Isotropic concept bar chart
-    ax = axes[2]
-    gauss_top_concepts = get_top_concept_info(cv_gauss_avg, concept_names, top_k=n_show)
-    all_names_g = []
-    for n, _ in orig_top_concepts:
-        if n not in all_names_g: all_names_g.append(n)
-    for n, _ in gauss_top_concepts:
-        if n not in all_names_g: all_names_g.append(n)
-    all_names_g = all_names_g[:30]
-    orig_dict_g = {n: v for n, v in orig_top_concepts}
-    gauss_dict = {n: v for n, v in gauss_top_concepts}
-    y_pos_g = np.arange(len(all_names_g))
-    ax.barh(y_pos_g - 0.2, [orig_dict_g.get(n, 0) for n in all_names_g], height=0.35, color='steelblue', label='Original', alpha=0.8)
-    ax.barh(y_pos_g + 0.2, [gauss_dict.get(n, 0) for n in all_names_g], height=0.35, color='coral', label=f'Isotropic avg', alpha=0.8)
-    ax.set_yticks(y_pos_g); ax.set_yticklabels([n[:25] for n in all_names_g], fontsize=9)
-    ax.invert_yaxis(); ax.set_xlabel('Activation')
-    ax.set_title(f'Isotropic: {get_class_name(PROBE_DATASET, pred_orig)} → '
-                 f'{get_class_name(PROBE_DATASET, pred_gauss)} '
-                 f'({"STABLE ✓" if pred_orig == pred_gauss else "CHANGED ✗"})',
-                 fontsize=12, fontweight='bold')
-    ax.legend(fontsize=9); ax.grid(True, axis='x', alpha=0.3)
-    plt.tight_layout()
-    plt.savefig(os.path.join(isotropic_dir, f"idx{target_idx}_isotropic.png"), dpi=150, bbox_inches='tight')
-    plt.close(fig)
+        # Panel 3: Isotropic concept bar chart
+        ax = axes[2]
+        gauss_top_concepts = get_top_concept_info(cv_gauss_avg, concept_names, top_k=n_show)
+        all_names_g = []
+        for n, _ in orig_top_concepts:
+            if n not in all_names_g: all_names_g.append(n)
+        for n, _ in gauss_top_concepts:
+            if n not in all_names_g: all_names_g.append(n)
+        all_names_g = all_names_g[:30]
+        orig_dict_g = {n: v for n, v in orig_top_concepts}
+        gauss_dict = {n: v for n, v in gauss_top_concepts}
+        y_pos_g = np.arange(len(all_names_g))
+        ax.barh(y_pos_g - 0.2, [orig_dict_g.get(n, 0) for n in all_names_g], height=0.35, color='steelblue', label='Original', alpha=0.8)
+        ax.barh(y_pos_g + 0.2, [gauss_dict.get(n, 0) for n in all_names_g], height=0.35, color='coral', label=f'Isotropic avg', alpha=0.8)
+        ax.set_yticks(y_pos_g); ax.set_yticklabels([n[:25] for n in all_names_g], fontsize=9)
+        ax.invert_yaxis(); ax.set_xlabel('Activation')
+        ax.set_title(f'Isotropic: {get_class_name(PROBE_DATASET, pred_orig)} → '
+                     f'{get_class_name(PROBE_DATASET, pred_gauss)} '
+                     f'({"STABLE ✓" if pred_orig == pred_gauss else "CHANGED ✗"})',
+                     fontsize=12, fontweight='bold')
+        ax.legend(fontsize=9); ax.grid(True, axis='x', alpha=0.3)
+        plt.tight_layout()
+        plt.savefig(os.path.join(isotropic_dir, f"idx{target_idx}_isotropic.png"), dpi=150, bbox_inches='tight')
+        plt.close(fig)
 
-    # Isotropic JSON
-    isotropic_result = {
-        'idx': target_idx,
-        'image_path': img_path,
-        'true_class': get_class_name(PROBE_DATASET, label_true),
-        'label_true': label_true,
-        'method': 'isotropic_gaussian',
-        'pred_orig': pred_orig,
-        'pred_orig_class': get_class_name(PROBE_DATASET, pred_orig),
-        'pred_smooth': pred_gauss,
-        'pred_smooth_class': get_class_name(PROBE_DATASET, pred_gauss),
-        'n_votes': n_votes_gauss,
-        'stable': pred_orig == pred_gauss,
-        'mean_overlap': round(float(np.mean(gauss_overlap)), 4),
-        'params': {'GAUSS_SIGMA': round(float(gauss_sigma), 4), 'N_SMOOTH_SAMPLES': N_SMOOTH_SAMPLES},
-        'original_concepts': [{'name': n, 'value': round(v, 4)} for n, v in orig_concepts],
-        'example_noisy_samples': gauss_example_samples,
-        'final_avg_concepts': [{'name': n, 'value': round(v, 4)} for n, v in gauss_final_concepts],
-    }
-    with open(os.path.join(isotropic_dir, f"idx{target_idx}_detail.json"), 'w') as f:
-        json.dump(isotropic_result, f, indent=2)
+        # Isotropic JSON
+        isotropic_result = {
+            'idx': target_idx,
+            'image_path': img_path,
+            'true_class': get_class_name(PROBE_DATASET, label_true),
+            'label_true': label_true,
+            'method': 'isotropic_gaussian',
+            'pred_orig': pred_orig,
+            'pred_orig_class': get_class_name(PROBE_DATASET, pred_orig),
+            'pred_smooth': pred_gauss,
+            'pred_smooth_class': get_class_name(PROBE_DATASET, pred_gauss),
+            'n_votes': n_votes_gauss,
+            'stable': pred_orig == pred_gauss,
+            'mean_overlap': round(float(np.mean(gauss_overlap)), 4),
+            'params': {'GAUSS_SIGMA': round(float(gauss_sigma), 4), 'N_SMOOTH_SAMPLES': N_SMOOTH_SAMPLES},
+            'original_concepts': [{'name': n, 'value': round(v, 4)} for n, v in orig_concepts],
+            'example_noisy_samples': gauss_example_samples,
+            'final_avg_concepts': [{'name': n, 'value': round(v, 4)} for n, v in gauss_final_concepts],
+        }
+        with open(os.path.join(isotropic_dir, f"idx{target_idx}_detail.json"), 'w') as f:
+            json.dump(isotropic_result, f, indent=2)
 
-    # Also save input image to both folders
-    if img_path and os.path.exists(img_path):
-        import shutil
-        ext = os.path.splitext(img_path)[1]
-        shutil.copy2(img_path, os.path.join(manifold_dir, f"idx{target_idx}_input{ext}"))
-        shutil.copy2(img_path, os.path.join(isotropic_dir, f"idx{target_idx}_input{ext}"))
+        # Also save input image to both folders
+        if img_path and os.path.exists(img_path):
+            import shutil
+            ext = os.path.splitext(img_path)[1]
+            shutil.copy2(img_path, os.path.join(manifold_dir, f"idx{target_idx}_input{ext}"))
+            shutil.copy2(img_path, os.path.join(isotropic_dir, f"idx{target_idx}_input{ext}"))
 
-    print(f"\n  Saved manifold results to: {manifold_dir}")
-    print(f"  Saved isotropic results to: {isotropic_dir}")
+        print(f"\n  Saved viz+detail for idx {target_idx} to: {manifold_dir} & {isotropic_dir}")
+        viz_count += 1
+    else:
+        if (loop_i + 1) % 50 == 0:
+            print(f"  [{loop_i+1}/{N_TARGETS}] done")
 
     results.append({
         'idx': target_idx,
