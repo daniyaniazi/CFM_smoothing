@@ -124,6 +124,7 @@ class MethodCFM(MethodBase):
 
     def __init__(self, args, vocab_txt_path=None, embeddings_path=None, use_sae_from_args=True, **kwargs):
         self.args = args
+        self.vocab_txt_path = vocab_txt_path
         sae_config_to_use = self.args.config_name
         super().__init__(args, **kwargs)
 
