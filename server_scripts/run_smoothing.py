@@ -17,6 +17,7 @@ Usage:
 
 import sys
 import os
+sys.stdout.reconfigure(line_buffering=True)  # force line-buffered output for SLURM
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 import torch
@@ -277,11 +278,11 @@ else:
 # ===========================================================================
 # Step 5: Manifold smoothing
 # ===========================================================================
-print("\n" + "=" * 70)
-print("Manifold smoothing")
-print("=" * 70)
-print(f"K={K_NEIGHBORS}, sigma={SCALE_WEIGHT}, N_samples={N_SMOOTH_SAMPLES}")
-print(f"Index: TRAIN ({N_TRAIN} vectors), Targets: VAL")
+print("\n" + "=" * 70, flush=True)
+print("Manifold smoothing", flush=True)
+print("=" * 70, flush=True)
+print(f"K={K_NEIGHBORS}, sigma={SCALE_WEIGHT}, N_samples={N_SMOOTH_SAMPLES}", flush=True)
+print(f"Index: TRAIN ({N_TRAIN} vectors), Targets: VAL", flush=True)
 
 results = []
 
@@ -307,7 +308,7 @@ os.makedirs(isotropic_dir, exist_ok=True)
 
 np.random.seed(42)
 TARGET_IDCS = np.random.choice(len(val_concept_vectors), size=N_TARGETS, replace=False).tolist()
-print(f"Certifying {N_TARGETS} val images (saving viz for first {N_VIZ})")
+print(f"Certifying {N_TARGETS} val images (saving viz for first {N_VIZ})", flush=True)
 viz_count = 0
 
 for loop_i, target_idx in enumerate(TARGET_IDCS):
@@ -437,7 +438,7 @@ for loop_i, target_idx in enumerate(TARGET_IDCS):
           f"orig={get_class_name(PROBE_DATASET, pred_orig)}  "
           f"manifold={get_class_name(PROBE_DATASET, pred_smooth)}({n_votes}/{N_SMOOTH_SAMPLES})  "
           f"gauss={get_class_name(PROBE_DATASET, pred_gauss)}({n_votes_gauss}/{N_SMOOTH_SAMPLES})  "
-          f"m_stable={pred_orig == pred_smooth}  g_stable={pred_orig == pred_gauss}")
+          f"m_stable={pred_orig == pred_smooth}  g_stable={pred_orig == pred_gauss}", flush=True)
 
     if save_viz:
         print(f"\n  ORIGINAL top-20 concepts:")
@@ -718,9 +719,9 @@ n_stable_manifold = sum(r['stable_manifold'] for r in results)
 n_stable_gaussian = sum(r['stable_gaussian'] for r in results)
 print(f"{'Method':<20s} {'Stable':<12s} {'Mean Overlap':<15s}")
 print(f"{'-'*47}")
-print(f"{'Manifold':<20s} {n_stable_manifold}/{len(results):<10s} "
+print(f"{'Manifold':<20s} {str(n_stable_manifold)+'/'+str(len(results)):<12s} "
       f"{np.mean([r['overlap_manifold'] for r in results]):.3f}")
-print(f"{'Gaussian (baseline)':<20s} {n_stable_gaussian}/{len(results):<10s} "
+print(f"{'Gaussian (baseline)':<20s} {str(n_stable_gaussian)+'/'+str(len(results)):<12s} "
       f"{np.mean([r['overlap_gaussian'] for r in results]):.3f}")
 
 results_path = os.path.join(SAVE_DIR, f"smoothing_results_{PROBE_DATASET}.json")
