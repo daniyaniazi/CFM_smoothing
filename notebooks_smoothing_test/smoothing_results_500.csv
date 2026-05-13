@@ -1,0 +1,501 @@
+num,idx,true_class,orig_pred,manifold_pred,manifold_votes,gauss_pred,gauss_votes,m_stable,g_stable,orig_correct,manifold_correct,gauss_correct,manifold_preserves_orig,gauss_preserves_orig
+1,33553,"mountain bike, all-terrain bike, off-roader","unicycle, monocycle","mountain bike, all-terrain bike, off-roader",68,"unicycle, monocycle",35,False,True,False,True,False,False,True
+2,9427,wire-haired fox terrier,giant schnauzer,giant schnauzer,52,wire-haired fox terrier,13,True,False,False,False,True,True,False
+3,199,"tiger shark, Galeocerdo cuvieri","great white shark, white shark, man-eater, man-eating shark, Carcharodon carcharias","tiger shark, Galeocerdo cuvieri",66,sturgeon,19,False,False,False,True,False,False,False
+4,12447,"Eskimo dog, husky","dingo, warrigal, warragal, Canis dingo","timber wolf, grey wolf, gray wolf, Canis lupus",36,"timber wolf, grey wolf, gray wolf, Canis lupus",11,False,False,False,False,False,False,False
+5,39489,shoji,shoji,chest,25,shoji,16,False,True,True,False,True,False,True
+6,42724,"theater curtain, theatre curtain","theater curtain, theatre curtain","theater curtain, theatre curtain",71,"theater curtain, theatre curtain",21,True,True,True,True,True,True,True
+7,10822,"clumber, clumber spaniel","clumber, clumber spaniel","clumber, clumber spaniel",91,"clumber, clumber spaniel",29,True,True,True,True,True,True,True
+8,49498,"hip, rose hip, rosehip","hip, rose hip, rosehip","hip, rose hip, rosehip",100,"hip, rose hip, rosehip",87,True,True,True,True,True,True,True
+9,4144,"ruffed grouse, partridge, Bonasa umbellus","ruffed grouse, partridge, Bonasa umbellus","ruffed grouse, partridge, Bonasa umbellus",95,"ruffed grouse, partridge, Bonasa umbellus",37,True,True,True,True,True,True,True
+10,36958,potter's wheel,potter's wheel,potter's wheel,100,potter's wheel,38,True,True,True,True,True,True,True
+11,43106,torch,torch,"albatross, mollymawk",31,torch,45,False,True,True,False,True,False,True
+12,38695,"saltshaker, salt shaker","saltshaker, salt shaker",water jug,35,"saltshaker, salt shaker",22,False,True,True,False,True,False,True
+13,6188,"spiny lobster, langouste, rock lobster, crawfish, crayfish, sea crawfish",honeycomb,honeycomb,61,honeycomb,16,True,True,False,False,False,True,True
+14,1414,"spotted salamander, Ambystoma maculatum","spotted salamander, Ambystoma maculatum","spotted salamander, Ambystoma maculatum",70,"spotted salamander, Ambystoma maculatum",25,True,True,True,True,True,True,True
+15,18471,"siamang, Hylobates syndactylus, Symphalangus syndactylus","siamang, Hylobates syndactylus, Symphalangus syndactylus",macaque,30,"siamang, Hylobates syndactylus, Symphalangus syndactylus",8,False,True,True,False,True,False,True
+16,29282,hair spray,hair spray,hair spray,57,hair spray,24,True,True,True,True,True,True,True
+17,15177,"long-horned beetle, longicorn, longicorn beetle","long-horned beetle, longicorn, longicorn beetle","long-horned beetle, longicorn, longicorn beetle",91,"long-horned beetle, longicorn, longicorn beetle",49,True,True,True,True,True,True,True
+18,34304,oil filter,oil filter,oil filter,100,oil filter,55,True,True,True,True,True,True,True
+19,12609,"affenpinscher, monkey pinscher, monkey dog",Brabancon griffon,Brabancon griffon,70,Brabancon griffon,16,True,True,False,False,False,True,True
+20,12144,boxer,boxer,boxer,45,boxer,18,True,True,True,True,True,True,True
+21,6113,"American lobster, Northern lobster, Maine lobster, Homarus americanus","American lobster, Northern lobster, Maine lobster, Homarus americanus","American lobster, Northern lobster, Maine lobster, Homarus americanus",77,"American lobster, Northern lobster, Maine lobster, Homarus americanus",19,True,True,True,True,True,True,True
+22,15908,"lacewing, lacewing fly","lacewing, lacewing fly","lacewing, lacewing fly",99,"lacewing, lacewing fly",71,True,True,True,True,True,True,True
+23,821,bulbul,bee eater,bee eater,76,bee eater,42,True,True,False,False,False,True,True
+24,15118,"ground beetle, carabid beetle",tiger beetle,"long-horned beetle, longicorn, longicorn beetle",55,tiger beetle,23,False,True,False,False,False,False,True
+25,13466,"timber wolf, grey wolf, gray wolf, Canis lupus","timber wolf, grey wolf, gray wolf, Canis lupus","timber wolf, grey wolf, gray wolf, Canis lupus",99,"timber wolf, grey wolf, gray wolf, Canis lupus",30,True,True,True,True,True,True,True
+26,26497,"diaper, nappy, napkin","diaper, nappy, napkin","diaper, nappy, napkin",96,"diaper, nappy, napkin",9,True,True,True,True,True,True,True
+27,42111,"swimming trunks, bathing trunks","swimming trunks, bathing trunks","swimming trunks, bathing trunks",87,"swimming trunks, bathing trunks",24,True,True,True,True,True,True,True
+28,30188,"horse cart, horse-cart","horse cart, horse-cart","horse cart, horse-cart",100,"horse cart, horse-cart",56,True,True,True,True,True,True,True
+29,37237,"projectile, missile",missile,missile,64,"projectile, missile",24,True,False,False,False,True,True,False
+30,33109,modem,"hard disc, hard disk, fixed disk",modem,44,"hard disc, hard disk, fixed disk",4,False,True,False,True,False,False,True
+31,36480,plate rack,plate rack,plate rack,52,plate rack,19,True,True,True,True,True,True,True
+32,24148,cassette player,tape player,CD player,64,CD player,21,False,False,False,False,False,False,False
+33,5503,"flatworm, platyhelminth","starfish, sea star","starfish, sea star",59,"starfish, sea star",10,True,True,False,False,False,True,True
+34,3918,tick,rhinoceros beetle,rhinoceros beetle,51,"long-horned beetle, longicorn, longicorn beetle",29,True,False,False,False,False,True,False
+35,38478,"rule, ruler","rule, ruler","rule, ruler",95,"rule, ruler",38,True,True,True,True,True,True,True
+36,21123,barbell,barbell,barbell,97,barbell,12,True,True,True,True,True,True,True
+37,49717,"stinkhorn, carrion fungus","stinkhorn, carrion fungus","stinkhorn, carrion fungus",100,"stinkhorn, carrion fungus",62,True,True,True,True,True,True,True
+38,42294,syringe,syringe,syringe,83,syringe,85,True,True,True,True,True,True,True
+39,47609,fig,fig,fig,100,fig,99,True,True,True,True,True,True,True
+40,11076,Irish water spaniel,standard poodle,"Newfoundland, Newfoundland dog",42,standard poodle,22,False,True,False,False,False,False,True
+41,41514,stretcher,stretcher,stretcher,93,stretcher,33,True,True,True,True,True,True,True
+42,22062,beer glass,beer glass,beer glass,100,beer glass,41,True,True,True,True,True,True,True
+43,9413,wire-haired fox terrier,wire-haired fox terrier,wire-haired fox terrier,46,wire-haired fox terrier,18,True,True,True,True,True,True,True
+44,38340,rotisserie,safe,safe,91,"refrigerator, icebox",13,True,False,False,False,False,True,False
+45,30263,iPod,iPod,iPod,69,iPod,11,True,True,True,True,True,True,True
+46,41252,stone wall,stone wall,stone wall,51,stone wall,28,True,True,True,True,True,True,True
+47,14644,"tiger, Panthera tigris","lynx, catamount",tiger cat,60,"lynx, catamount",31,False,True,False,False,False,False,True
+48,26335,desk,monitor,"notebook, notebook computer",65,"hard disc, hard disk, fixed disk",6,False,False,False,False,False,False,False
+49,28102,fountain,fountain,fountain,89,fountain,7,True,True,True,True,True,True,True
+50,17523,"ibex, Capra ibex","ibex, Capra ibex","ibex, Capra ibex",100,"ibex, Capra ibex",60,True,True,True,True,True,True,True
+51,24712,"chime, bell, gong",tile roof,tile roof,58,tile roof,7,True,True,False,False,False,True,True
+52,40485,soup bowl,soup bowl,soup bowl,86,"cucumber, cuke",9,True,False,True,True,False,True,False
+53,3850,"wolf spider, hunting spider","harvestman, daddy longlegs, Phalangium opilio","wolf spider, hunting spider",54,"wolf spider, hunting spider",16,False,False,False,True,True,False,False
+54,40040,"slot, one-armed bandit","slot, one-armed bandit","cinema, movie theater, movie theatre, movie house, picture palace",30,"slot, one-armed bandit",6,False,True,True,False,True,False,True
+55,15267,dung beetle,dung beetle,dung beetle,48,dung beetle,43,True,True,True,True,True,True,True
+56,49146,"groom, bridegroom","groom, bridegroom","groom, bridegroom",100,"groom, bridegroom",77,True,True,True,True,True,True,True
+57,30001,"hook, claw","bannister, banister, balustrade, balusters, handrail","hook, claw",21,"hook, claw",7,False,False,False,True,True,False,False
+58,45926,"crossword puzzle, crossword","crossword puzzle, crossword","crossword puzzle, crossword",100,"crossword puzzle, crossword",83,True,True,True,True,True,True,True
+59,43824,"tub, vat","tub, vat","megalith, megalithic structure",41,"tub, vat",5,False,True,True,False,True,False,True
+60,17240,"hippopotamus, hippo, river horse, Hippopotamus amphibius","hippopotamus, hippo, river horse, Hippopotamus amphibius","hippopotamus, hippo, river horse, Hippopotamus amphibius",98,"hippopotamus, hippo, river horse, Hippopotamus amphibius",68,True,True,True,True,True,True,True
+61,4892,drake,drake,drake,99,drake,44,True,True,True,True,True,True,True
+62,725,"indigo bunting, indigo finch, indigo bird, Passerina cyanea","indigo bunting, indigo finch, indigo bird, Passerina cyanea","indigo bunting, indigo finch, indigo bird, Passerina cyanea",88,"indigo bunting, indigo finch, indigo bird, Passerina cyanea",43,True,True,True,True,True,True,True
+63,22949,"brass, memorial tablet, plaque","brass, memorial tablet, plaque","brass, memorial tablet, plaque",62,"brass, memorial tablet, plaque",23,True,True,True,True,True,True,True
+64,34657,"paddle, boat paddle","paddle, boat paddle","paddle, boat paddle",100,"paddle, boat paddle",25,True,True,True,True,True,True,True
+65,37213,"projectile, missile","aircraft carrier, carrier, flattop, attack aircraft carrier","aircraft carrier, carrier, flattop, attack aircraft carrier",82,"aircraft carrier, carrier, flattop, attack aircraft carrier",34,True,True,False,False,False,True,True
+66,20304,altar,throne,altar,65,throne,29,False,True,False,True,False,False,True
+67,15269,dung beetle,dung beetle,"tailed frog, bell toad, ribbed toad, tailed toad, Ascaphus trui",35,dung beetle,9,False,True,True,False,True,False,True
+68,22367,"binoculars, field glasses, opera glasses","binoculars, field glasses, opera glasses","binoculars, field glasses, opera glasses",96,"binoculars, field glasses, opera glasses",69,True,True,True,True,True,True,True
+69,42684,"thatch, thatched roof","thatch, thatched roof",birdhouse,59,"thatch, thatched roof",23,False,True,True,False,True,False,True
+70,46734,"hotdog, hot dog, red hot","hotdog, hot dog, red hot","hotdog, hot dog, red hot",45,"Dungeness crab, Cancer magister",13,True,False,True,True,False,True,False
+71,11732,Rottweiler,Greater Swiss Mountain dog,Greater Swiss Mountain dog,65,Greater Swiss Mountain dog,12,True,True,False,False,False,True,True
+72,18619,baboon,baboon,baboon,79,baboon,25,True,True,True,True,True,True,True
+73,48492,eggnog,eggnog,eggnog,99,eggnog,49,True,True,True,True,True,True,True
+74,26803,"dock, dockage, docking facility","paddlewheel, paddle wheel","dock, dockage, docking facility",43,"paddlewheel, paddle wheel",16,False,True,False,True,False,False,True
+75,44305,vending machine,vending machine,vending machine,84,vending machine,35,True,True,True,True,True,True,True
+76,47522,orange,buckle,buckle,89,buckle,21,True,True,False,False,False,True,True
+77,32207,matchstick,"lighter, light, igniter, ignitor",pencil sharpener,66,pencil sharpener,18,False,False,False,False,False,False,False
+78,2530,"American alligator, Alligator mississipiensis",water snake,water snake,94,water snake,29,True,True,False,False,False,True,True
+79,17746,"Arabian camel, dromedary, Camelus dromedarius","Arabian camel, dromedary, Camelus dromedarius","Arabian camel, dromedary, Camelus dromedarius",99,"Arabian camel, dromedary, Camelus dromedarius",32,True,True,True,True,True,True,True
+80,8270,black-and-tan coonhound,black-and-tan coonhound,Brabancon griffon,35,black-and-tan coonhound,10,False,True,True,False,True,False,True
+81,15079,"ladybug, ladybeetle, lady beetle, ladybird, ladybird beetle","ladybug, ladybeetle, lady beetle, ladybird, ladybird beetle","long-horned beetle, longicorn, longicorn beetle",55,"ladybug, ladybeetle, lady beetle, ladybird, ladybird beetle",23,False,True,True,False,True,False,True
+82,13624,"coyote, prairie wolf, brush wolf, Canis latrans","timber wolf, grey wolf, gray wolf, Canis lupus","timber wolf, grey wolf, gray wolf, Canis lupus",91,"timber wolf, grey wolf, gray wolf, Canis lupus",29,True,True,False,False,False,True,True
+83,30638,"jinrikisha, ricksha, rickshaw","jinrikisha, ricksha, rickshaw","jinrikisha, ricksha, rickshaw",78,"jinrikisha, ricksha, rickshaw",43,True,True,True,True,True,True,True
+84,30440,"jean, blue jean, denim","cowboy hat, ten-gallon hat","cowboy hat, ten-gallon hat",100,"cowboy hat, ten-gallon hat",33,True,True,False,False,False,True,True
+85,36056,pillow,pillow,pillow,57,pillow,34,True,True,True,True,True,True,True
+86,42651,"thatch, thatched roof","thatch, thatched roof","thatch, thatched roof",98,"thatch, thatched roof",38,True,True,True,True,True,True,True
+87,36803,"pool table, billiard table, snooker table","pool table, billiard table, snooker table","pool table, billiard table, snooker table",100,"pool table, billiard table, snooker table",60,True,True,True,True,True,True,True
+88,48224,potpie,"bagel, beigel","bagel, beigel",91,"bagel, beigel",47,True,True,False,False,False,True,True
+89,29226,hair slide,hair slide,hair slide,70,hair slide,18,True,True,True,True,True,True,True
+90,5633,conch,conch,conch,86,conch,34,True,True,True,True,True,True,True
+91,5987,"rock crab, Cancer irroratus","rock crab, Cancer irroratus","rock crab, Cancer irroratus",53,"rock crab, Cancer irroratus",38,True,True,True,True,True,True,True
+92,48063,dough,dough,dough,96,dough,46,True,True,True,True,True,True,True
+93,1812,terrapin,terrapin,terrapin,54,mud turtle,23,True,False,True,True,False,True,False
+94,27578,face powder,face powder,face powder,71,bottlecap,19,True,False,True,True,False,True,False
+95,16823,marmot,marmot,marmot,94,marmot,34,True,True,True,True,True,True,True
+96,3928,tick,tick,tick,87,tick,38,True,True,True,True,True,True,True
+97,37286,projector,projector,projector,59,projector,23,True,True,True,True,True,True,True
+98,25045,cliff dwelling,cliff dwelling,cliff dwelling,97,cliff dwelling,29,True,True,True,True,True,True,True
+99,15727,"cockroach, roach","cockroach, roach","cockroach, roach",55,"ant, emmet, pismire",19,True,False,True,True,False,True,False
+100,29600,"hard disc, hard disk, fixed disk","hard disc, hard disk, fixed disk","hard disc, hard disk, fixed disk",80,"hard disc, hard disk, fixed disk",14,True,True,True,True,True,True,True
+101,10430,Labrador retriever,Labrador retriever,Labrador retriever,52,flat-coated retriever,11,True,False,True,True,False,True,False
+102,25768,"cowboy hat, ten-gallon hat",sombrero,sombrero,40,sombrero,21,True,True,False,False,False,True,True
+103,29103,"grocery store, grocery, food market, market","grocery store, grocery, food market, market","grocery store, grocery, food market, market",95,"grocery store, grocery, food market, market",36,True,True,True,True,True,True,True
+104,36537,"plow, plough",oxcart,tractor,30,"plow, plough",11,False,False,False,False,True,False,False
+105,39328,sewing machine,sewing machine,sewing machine,57,sewing machine,15,True,True,True,True,True,True,True
+106,35539,pencil sharpener,pencil sharpener,pencil sharpener,75,pencil sharpener,15,True,True,True,True,True,True,True
+107,28075,forklift,crane,crane,43,crane,10,True,True,False,False,False,True,True
+108,17840,weasel,badger,badger,89,badger,26,True,True,False,False,False,True,True
+109,27802,"fire screen, fireguard",strainer,"fire screen, fireguard",48,"fire screen, fireguard",20,False,False,False,True,True,False,False
+110,7682,"Maltese dog, Maltese terrier, Maltese",komondor,soft-coated wheaten terrier,35,komondor,19,False,True,False,False,False,False,True
+111,24279,CD player,CD player,CD player,98,CD player,39,True,True,True,True,True,True,True
+112,33070,Model T,Model T,Model T,88,Model T,20,True,True,True,True,True,True,True
+113,35557,"perfume, essence","perfume, essence","perfume, essence",89,"perfume, essence",39,True,True,True,True,True,True,True
+114,37189,"prison, prison house","prison, prison house","prison, prison house",100,"prison, prison house",28,True,True,True,True,True,True,True
+115,47149,butternut squash,acorn squash,acorn squash,85,acorn squash,39,True,True,False,False,False,True,True
+116,46915,cauliflower,cauliflower,cauliflower,100,cauliflower,93,True,True,True,True,True,True,True
+117,9801,miniature schnauzer,Kerry blue terrier,miniature schnauzer,63,Kerry blue terrier,18,False,True,False,True,False,False,True
+118,38800,"sax, saxophone","flute, transverse flute","flute, transverse flute",45,trombone,10,True,False,False,False,False,True,False
+119,24669,"chiffonier, commode","wardrobe, closet, press",sliding door,55,sliding door,12,False,False,False,False,False,False,False
+120,44233,vault,vault,vault,92,"church, church building",18,True,False,True,True,False,True,False
+121,31919,maillot,"maillot, tank suit","maillot, tank suit",75,maillot,22,True,False,False,False,True,True,False
+122,7134,dowitcher,"red-backed sandpiper, dunlin, Erolia alpina",dowitcher,49,"red-backed sandpiper, dunlin, Erolia alpina",24,False,True,False,True,False,False,True
+123,33704,mousetrap,mousetrap,mousetrap,91,mousetrap,26,True,True,True,True,True,True,True
+124,29660,"harmonica, mouth organ, harp, mouth harp","harmonica, mouth organ, harp, mouth harp","harmonica, mouth organ, harp, mouth harp",54,"harmonica, mouth organ, harp, mouth harp",12,True,True,True,True,True,True,True
+125,17893,mink,mongoose,mongoose,54,mongoose,13,True,True,False,False,False,True,True
+126,22018,beer bottle,beer glass,beer glass,35,beer glass,6,True,True,False,False,False,True,True
+127,13538,"white wolf, Arctic wolf, Canis lupus tundrarum","white wolf, Arctic wolf, Canis lupus tundrarum","white wolf, Arctic wolf, Canis lupus tundrarum",92,"white wolf, Arctic wolf, Canis lupus tundrarum",33,True,True,True,True,True,True,True
+128,43118,torch,torch,volcano,27,torch,25,False,True,True,False,True,False,True
+129,36420,plastic bag,plastic bag,plastic bag,13,mosquito net,4,True,False,True,True,False,True,False
+130,9405,wire-haired fox terrier,Irish wolfhound,"borzoi, Russian wolfhound",41,Irish wolfhound,9,False,True,False,False,False,False,True
+131,13413,Mexican hairless,Mexican hairless,"Saluki, gazelle hound",41,Mexican hairless,17,False,True,True,False,True,False,True
+132,6720,crane,"limpkin, Aramus pictus","limpkin, Aramus pictus",59,"limpkin, Aramus pictus",22,True,True,False,False,False,True,True
+133,15601,cricket,broccoli,broccoli,75,broccoli,12,True,True,False,False,False,True,True
+134,44743,"wardrobe, closet, press","swab, swob, mop","swab, swob, mop",34,Christmas stocking,11,True,False,False,False,False,True,False
+135,31138,"lens cap, lens cover","microphone, mike",tripod,31,cabbage butterfly,4,False,False,False,False,False,False,False
+136,2729,"hognose snake, puff adder, sand viper","rock python, rock snake, Python sebae","rock python, rock snake, Python sebae",79,water snake,13,True,False,False,False,False,True,False
+137,38242,rifle,military uniform,military uniform,76,military uniform,25,True,True,False,False,False,True,True
+138,29625,"hard disc, hard disk, fixed disk",shower cap,menu,26,shower cap,10,False,True,False,False,False,False,True
+139,47894,pomegranate,pomegranate,pomegranate,100,pomegranate,60,True,True,True,True,True,True,True
+140,42090,sweatshirt,sweatshirt,"jean, blue jean, denim",59,Gordon setter,3,False,False,True,False,False,False,False
+141,36399,planetarium,planetarium,planetarium,100,planetarium,70,True,True,True,True,True,True,True
+142,6244,"crayfish, crawfish, crawdad, crawdaddy",centipede,centipede,48,centipede,40,True,True,False,False,False,True,True
+143,5545,"flatworm, platyhelminth","flatworm, platyhelminth","flatworm, platyhelminth",66,"flatworm, platyhelminth",17,True,True,True,True,True,True,True
+144,4064,ptarmigan,"cheetah, chetah, Acinonyx jubatus",armadillo,58,"prairie chicken, prairie grouse, prairie fowl",10,False,False,False,False,False,False,False
+145,12851,Great Pyrenees,Great Pyrenees,Labrador retriever,44,Great Pyrenees,9,False,True,True,False,True,False,True
+146,21802,"beach wagon, station wagon, wagon, estate car, beach waggon, station waggon, waggon","beach wagon, station wagon, wagon, estate car, beach waggon, station waggon, waggon","beach wagon, station wagon, wagon, estate car, beach waggon, station waggon, waggon",99,"beach wagon, station wagon, wagon, estate car, beach waggon, station waggon, waggon",38,True,True,True,True,True,True,True
+147,41163,stethoscope,stethoscope,"lab coat, laboratory coat",79,"lab coat, laboratory coat",18,False,False,True,False,False,False,False
+148,6232,"crayfish, crawfish, crawdad, crawdaddy",fiddler crab,hermit crab,52,hermit crab,17,False,False,False,False,False,False,False
+149,3862,"wolf spider, hunting spider","wolf spider, hunting spider","wolf spider, hunting spider",67,"wolf spider, hunting spider",18,True,True,True,True,True,True,True
+150,35094,"parachute, chute","parachute, chute","parachute, chute",100,"parachute, chute",95,True,True,True,True,True,True,True
+151,40195,"snowplow, snowplough","snowplow, snowplough","snowplow, snowplough",99,"snowplow, snowplough",47,True,True,True,True,True,True,True
+152,39250,"seat belt, seatbelt","seat belt, seatbelt","seat belt, seatbelt",100,"seat belt, seatbelt",27,True,True,True,True,True,True,True
+153,6217,"crayfish, crawfish, crawdad, crawdaddy","crayfish, crawfish, crawdad, crawdaddy","spiny lobster, langouste, rock lobster, crawfish, crayfish, sea crawfish",40,"crayfish, crawfish, crawdad, crawdaddy",19,False,True,True,False,True,False,True
+154,36775,poncho,poncho,poncho,77,poncho,31,True,True,True,True,True,True,True
+155,42976,toaster,"bagel, beigel","bagel, beigel",99,"bagel, beigel",70,True,True,False,False,False,True,True
+156,48467,eggnog,eggnog,eggnog,95,eggnog,39,True,True,True,True,True,True,True
+157,14831,"ice bear, polar bear, Ursus Maritimus, Thalarctos maritimus","ice bear, polar bear, Ursus Maritimus, Thalarctos maritimus","ice bear, polar bear, Ursus Maritimus, Thalarctos maritimus",71,"ice bear, polar bear, Ursus Maritimus, Thalarctos maritimus",39,True,True,True,True,True,True,True
+158,30092,"hoopskirt, crinoline","hoopskirt, crinoline","hoopskirt, crinoline",85,"hoopskirt, crinoline",37,True,True,True,True,True,True,True
+159,8893,"Scottish deerhound, deerhound","Scottish deerhound, deerhound","Scottish deerhound, deerhound",96,"Scottish deerhound, deerhound",46,True,True,True,True,True,True,True
+160,6020,fiddler crab,scorpion,scorpion,86,scorpion,12,True,True,False,False,False,True,True
+161,46088,"book jacket, dust cover, dust jacket, dust wrapper",mashed potato,mashed potato,41,menu,10,True,False,False,False,False,True,False
+162,15242,"leaf beetle, chrysomelid","leaf beetle, chrysomelid","leaf beetle, chrysomelid",87,"leaf beetle, chrysomelid",28,True,True,True,True,True,True,True
+163,45307,Windsor tie,"book jacket, dust cover, dust jacket, dust wrapper","book jacket, dust cover, dust jacket, dust wrapper",41,"pool table, billiard table, snooker table",4,True,False,False,False,False,True,False
+164,26550,digital watch,"ballpoint, ballpoint pen, ballpen, Biro","carpenter's kit, tool kit",38,"cleaver, meat cleaver, chopper",8,False,False,False,False,False,False,False
+165,6034,fiddler crab,"spiny lobster, langouste, rock lobster, crawfish, crayfish, sea crawfish",scorpion,78,scorpion,14,False,False,False,False,False,False,False
+166,7905,toy terrier,Chihuahua,Chihuahua,73,Mexican hairless,17,True,False,False,False,False,True,False
+167,32225,matchstick,ping-pong ball,croquet ball,54,ping-pong ball,23,False,True,False,False,False,False,True
+168,6017,fiddler crab,"rock crab, Cancer irroratus","rock crab, Cancer irroratus",76,"rock crab, Cancer irroratus",21,True,True,False,False,False,True,True
+169,21879,"beacon, lighthouse, beacon light, pharos","beacon, lighthouse, beacon light, pharos","beacon, lighthouse, beacon light, pharos",78,"beacon, lighthouse, beacon light, pharos",16,True,True,True,True,True,True,True
+170,2791,"green snake, grass snake","green snake, grass snake","green snake, grass snake",91,"green snake, grass snake",23,True,True,True,True,True,True,True
+171,42605,tennis ball,tennis ball,"lacewing, lacewing fly",69,tennis ball,100,False,True,True,False,True,False,True
+172,5823,"chiton, coat-of-mail shell, sea cradle, polyplacophore",isopod,isopod,64,isopod,31,True,True,False,False,False,True,True
+173,15387,weevil,weevil,weevil,99,weevil,64,True,True,True,True,True,True,True
+174,29561,"handkerchief, hankie, hanky, hankey","handkerchief, hankie, hanky, hankey","handkerchief, hankie, hanky, hankey",100,"handkerchief, hankie, hanky, hankey",55,True,True,True,True,True,True,True
+175,39475,shoji,shoji,shoji,57,shoji,24,True,True,True,True,True,True,True
+176,292,"electric ray, crampfish, numbfish, torpedo","electric ray, crampfish, numbfish, torpedo","electric ray, crampfish, numbfish, torpedo",100,"electric ray, crampfish, numbfish, torpedo",36,True,True,True,True,True,True,True
+177,16957,sorrel,"worm fence, snake fence, snake-rail fence, Virginia fence","worm fence, snake fence, snake-rail fence, Virginia fence",54,"worm fence, snake fence, snake-rail fence, Virginia fence",14,True,True,False,False,False,True,True
+178,30860,"lab coat, laboratory coat","lab coat, laboratory coat",wig,52,"lab coat, laboratory coat",18,False,True,True,False,True,False,True
+179,14073,"tabby, tabby cat","lynx, catamount","lynx, catamount",97,"lynx, catamount",20,True,True,False,False,False,True,True
+180,21856,"beacon, lighthouse, beacon light, pharos","beacon, lighthouse, beacon light, pharos","beacon, lighthouse, beacon light, pharos",97,"beacon, lighthouse, beacon light, pharos",41,True,True,True,True,True,True,True
+181,22079,beer glass,beer glass,beer glass,86,beer glass,35,True,True,True,True,True,True,True
+182,17023,zebra,geyser,geyser,56,geyser,14,True,True,False,False,False,True,True
+183,8739,"Norwegian elkhound, elkhound","Norwegian elkhound, elkhound",groenendael,47,"Norwegian elkhound, elkhound",36,False,True,True,False,True,False,True
+184,15825,"cicada, cicala","cicada, cicala","cicada, cicala",86,"red-backed sandpiper, dunlin, Erolia alpina",8,True,False,True,True,False,True,False
+185,2741,"hognose snake, puff adder, sand viper",water snake,water snake,43,centipede,12,True,False,False,False,False,True,False
+186,18048,otter,"platypus, duckbill, duckbilled platypus, duck-billed platypus, Ornithorhynchus anatinus",beaver,31,"platypus, duckbill, duckbilled platypus, duck-billed platypus, Ornithorhynchus anatinus",10,False,True,False,False,False,False,True
+187,49936,"ear, spike, capitulum",corn,corn,89,corn,20,True,True,False,False,False,True,True
+188,17372,bison,bison,bison,57,bison,26,True,True,True,True,True,True,True
+189,22021,beer bottle,"pop bottle, soda bottle","pop bottle, soda bottle",92,"pop bottle, soda bottle",29,True,True,False,False,False,True,True
+190,46364,trifle,trifle,trifle,56,trifle,35,True,True,True,True,True,True,True
+191,23537,"candle, taper, wax light","candle, taper, wax light","candle, taper, wax light",100,"candle, taper, wax light",72,True,True,True,True,True,True,True
+192,45499,wok,"hot pot, hotpot","hot pot, hotpot",54,"hot pot, hotpot",29,True,True,False,False,False,True,True
+193,40185,"snowplow, snowplough","snowplow, snowplough","snowplow, snowplough",91,"snowplow, snowplough",18,True,True,True,True,True,True,True
+194,9613,"cairn, cairn terrier",West Highland white terrier,"silky terrier, Sydney silky",37,Yorkshire terrier,19,False,False,False,False,False,False,False
+195,43281,toyshop,toyshop,toyshop,92,toyshop,22,True,True,True,True,True,True,True
+196,37891,"recreational vehicle, RV, R.V.","recreational vehicle, RV, R.V.","recreational vehicle, RV, R.V.",95,"recreational vehicle, RV, R.V.",24,True,True,True,True,True,True,True
+197,26178,crutch,crutch,crutch,76,crutch,16,True,True,True,True,True,True,True
+198,45892,comic book,comic book,comic book,97,comic book,22,True,True,True,True,True,True,True
+199,20933,"ballpoint, ballpoint pen, ballpen, Biro","letter opener, paper knife, paperknife","letter opener, paper knife, paperknife",77,"letter opener, paper knife, paperknife",13,True,True,False,False,False,True,True
+200,40971,stage,folding chair,folding chair,68,projector,7,True,False,False,False,False,True,False
+201,22224,"bicycle-built-for-two, tandem bicycle, tandem","bicycle-built-for-two, tandem bicycle, tandem","bicycle-built-for-two, tandem bicycle, tandem",90,"bicycle-built-for-two, tandem bicycle, tandem",39,True,True,True,True,True,True,True
+202,24381,"cellular telephone, cellular phone, cellphone, cell, mobile phone","can opener, tin opener","can opener, tin opener",43,"can opener, tin opener",10,True,True,False,False,False,True,True
+203,34855,"pajama, pyjama, pj's, jammies","pajama, pyjama, pj's, jammies","pajama, pyjama, pj's, jammies",100,"pajama, pyjama, pj's, jammies",39,True,True,True,True,True,True,True
+204,48577,bubble,bubble,bubble,100,bubble,74,True,True,True,True,True,True,True
+205,38536,running shoe,running shoe,running shoe,98,running shoe,69,True,True,True,True,True,True,True
+206,31755,magnetic compass,magnetic compass,magnetic compass,100,magnetic compass,43,True,True,True,True,True,True,True
+207,7753,Shih-Tzu,"Pekinese, Pekingese, Peke","Lhasa, Lhasa apso",49,"Pekinese, Pekingese, Peke",28,False,True,False,False,False,False,True
+208,46638,pretzel,pretzel,pretzel,63,pretzel,20,True,True,True,True,True,True,True
+209,43834,"tub, vat","tub, vat","bikini, two-piece",33,"bikini, two-piece",4,False,False,True,False,False,False,False
+210,26235,cuirass,"breastplate, aegis, egis","breastplate, aegis, egis",75,"shield, buckler",10,True,False,False,False,False,True,False
+211,44229,vault,cliff dwelling,"megalith, megalithic structure",45,cliff dwelling,27,False,True,False,False,False,False,True
+212,49596,coral fungus,coral fungus,coral fungus,78,coral fungus,25,True,True,True,True,True,True,True
+213,18552,"patas, hussar monkey, Erythrocebus patas","proboscis monkey, Nasalis larvatus","ruffed grouse, partridge, Bonasa umbellus",41,"Madagascar cat, ring-tailed lemur, Lemur catta",5,False,False,False,False,False,False,False
+214,43136,torch,"bathing cap, swimming cap","traffic light, traffic signal, stoplight",49,"unicycle, monocycle",4,False,False,False,False,False,False,False
+215,36672,pole,"beacon, lighthouse, beacon light, pharos","beacon, lighthouse, beacon light, pharos",42,pier,8,True,False,False,False,False,True,False
+216,43649,tripod,tripod,"lynx, catamount",31,tripod,10,False,True,True,False,True,False,True
+217,3940,tick,tick,tick,93,tick,44,True,True,True,True,True,True,True
+218,31496,"lipstick, lip rouge","lipstick, lip rouge","lipstick, lip rouge",87,"lipstick, lip rouge",42,True,True,True,True,True,True,True
+219,26593,digital watch,digital watch,digital watch,90,digital watch,25,True,True,True,True,True,True,True
+220,23921,carton,carton,carton,88,carton,7,True,True,True,True,True,True,True
+221,26402,"dial telephone, dial phone","dial telephone, dial phone","dial telephone, dial phone",99,"dial telephone, dial phone",36,True,True,True,True,True,True,True
+222,45942,"crossword puzzle, crossword","crossword puzzle, crossword","crossword puzzle, crossword",100,"crossword puzzle, crossword",68,True,True,True,True,True,True,True
+223,48525,alp,"valley, vale","valley, vale",54,alp,29,True,False,False,False,True,True,False
+224,18315,"gorilla, Gorilla gorilla","gorilla, Gorilla gorilla","gorilla, Gorilla gorilla",63,macaque,9,True,False,True,True,False,True,False
+225,36893,"pop bottle, soda bottle","pop bottle, soda bottle","pop bottle, soda bottle",93,"pop bottle, soda bottle",14,True,True,True,True,True,True,True
+226,26695,"dishrag, dishcloth",stole,"dishrag, dishcloth",74,stole,26,False,True,False,True,False,False,True
+227,42127,"swimming trunks, bathing trunks","paddle, boat paddle","sandbar, sand bar",41,"paddle, boat paddle",9,False,True,False,False,False,False,True
+228,14170,Persian cat,Persian cat,Persian cat,68,Persian cat,13,True,True,True,True,True,True,True
+229,3732,"garden spider, Aranea diademata","garden spider, Aranea diademata","garden spider, Aranea diademata",81,"garden spider, Aranea diademata",27,True,True,True,True,True,True,True
+230,7881,papillon,papillon,papillon,100,papillon,43,True,True,True,True,True,True,True
+231,6016,fiddler crab,scorpion,scorpion,85,scorpion,31,True,True,False,False,False,True,True
+232,23029,"breakwater, groin, groyne, mole, bulwark, seawall, jetty","breakwater, groin, groyne, mole, bulwark, seawall, jetty","breakwater, groin, groyne, mole, bulwark, seawall, jetty",91,"breakwater, groin, groyne, mole, bulwark, seawall, jetty",15,True,True,True,True,True,True,True
+233,35473,"pencil box, pencil case","pencil box, pencil case","pencil box, pencil case",79,"pencil box, pencil case",11,True,True,True,True,True,True,True
+234,49685,gyromitra,gyromitra,gyromitra,67,gyromitra,49,True,True,True,True,True,True,True
+235,4817,toucan,toucan,toucan,78,toucan,38,True,True,True,True,True,True,True
+236,41693,"submarine, pigboat, sub, U-boat","submarine, pigboat, sub, U-boat","submarine, pigboat, sub, U-boat",100,"submarine, pigboat, sub, U-boat",81,True,True,True,True,True,True,True
+237,12007,Appenzeller,Greater Swiss Mountain dog,Greater Swiss Mountain dog,93,Greater Swiss Mountain dog,34,True,True,False,False,False,True,True
+238,41327,"stopwatch, stop watch","stopwatch, stop watch","stopwatch, stop watch",64,"stopwatch, stop watch",23,True,True,True,True,True,True,True
+239,9506,"Sealyham terrier, Sealyham",Great Pyrenees,"clumber, clumber spaniel",62,Great Pyrenees,18,False,True,False,False,False,False,True
+240,44798,"warplane, military plane","warplane, military plane","warplane, military plane",65,"warplane, military plane",27,True,True,True,True,True,True,True
+241,34062,"notebook, notebook computer","notebook, notebook computer","notebook, notebook computer",95,"laptop, laptop computer",19,True,False,True,True,False,True,False
+242,27474,envelope,envelope,envelope,100,envelope,29,True,True,True,True,True,True,True
+243,31143,"lens cap, lens cover",projector,barbell,42,milk can,7,False,False,False,False,False,False,False
+244,21235,barbershop,barbershop,barbershop,99,barbershop,35,True,True,True,True,True,True,True
+245,1390,eft,eft,eft,62,eft,14,True,True,True,True,True,True,True
+246,38249,rifle,scabbard,scabbard,39,"revolver, six-gun, six-shooter",10,True,False,False,False,False,True,False
+247,37624,"racket, racquet","racket, racquet","racket, racquet",97,"racket, racquet",17,True,True,True,True,True,True,True
+248,42028,"swab, swob, mop","swab, swob, mop","swab, swob, mop",88,"swab, swob, mop",52,True,True,True,True,True,True,True
+249,20834,"balance beam, beam","balance beam, beam","balance beam, beam",95,"balance beam, beam",37,True,True,True,True,True,True,True
+250,14757,"American black bear, black bear, Ursus americanus, Euarctos americanus","American black bear, black bear, Ursus americanus, Euarctos americanus",wombat,55,"American black bear, black bear, Ursus americanus, Euarctos americanus",12,False,True,True,False,True,False,True
+251,26396,desktop computer,desktop computer,desktop computer,72,desktop computer,20,True,True,True,True,True,True,True
+252,6808,"European gallinule, Porphyrio porphyrio","European gallinule, Porphyrio porphyrio","European gallinule, Porphyrio porphyrio",94,"European gallinule, Porphyrio porphyrio",38,True,True,True,True,True,True,True
+253,9225,Irish terrier,Irish terrier,Irish terrier,69,Irish terrier,33,True,True,True,True,True,True,True
+254,48394,espresso,espresso,espresso,32,espresso maker,7,True,False,True,True,False,True,False
+255,5395,jellyfish,jellyfish,jellyfish,78,jellyfish,20,True,True,True,True,True,True,True
+256,6943,bustard,bustard,hornbill,61,bustard,14,False,True,True,False,True,False,True
+257,23870,"carpenter's kit, tool kit",toyshop,"carpenter's kit, tool kit",32,pencil sharpener,7,False,False,False,True,False,False,False
+258,32492,"megalith, megalithic structure","megalith, megalithic structure","megalith, megalithic structure",98,"megalith, megalithic structure",52,True,True,True,True,True,True,True
+259,36345,"plane, carpenter's plane, woodworking plane","plane, carpenter's plane, woodworking plane","plane, carpenter's plane, woodworking plane",89,"plane, carpenter's plane, woodworking plane",50,True,True,True,True,True,True,True
+260,10755,Brittany spaniel,toy poodle,toy poodle,46,toy poodle,15,True,True,False,False,False,True,True
+261,12301,Great Dane,Great Dane,Great Dane,64,Great Dane,18,True,True,True,True,True,True,True
+262,48386,espresso,espresso,espresso,100,espresso,45,True,True,True,True,True,True,True
+263,42745,"theater curtain, theatre curtain","theater curtain, theatre curtain","theater curtain, theatre curtain",69,"theater curtain, theatre curtain",12,True,True,True,True,True,True,True
+264,29089,"grille, radiator grille","police van, police wagon, paddy wagon, patrol wagon, wagon, black Maria","police van, police wagon, paddy wagon, patrol wagon, wagon, black Maria",86,"police van, police wagon, paddy wagon, patrol wagon, wagon, black Maria",27,True,True,False,False,False,True,True
+265,44712,"wardrobe, closet, press","wardrobe, closet, press","wardrobe, closet, press",46,"wardrobe, closet, press",14,True,True,True,True,True,True,True
+266,14343,"cougar, puma, catamount, mountain lion, painter, panther, Felis concolor","cougar, puma, catamount, mountain lion, painter, panther, Felis concolor","cougar, puma, catamount, mountain lion, painter, panther, Felis concolor",96,"cougar, puma, catamount, mountain lion, painter, panther, Felis concolor",69,True,True,True,True,True,True,True
+267,38172,"revolver, six-gun, six-shooter","revolver, six-gun, six-shooter","revolver, six-gun, six-shooter",79,"revolver, six-gun, six-shooter",36,True,True,True,True,True,True,True
+268,5071,tusker,"water buffalo, water ox, Asiatic buffalo, Bubalus bubalis","water buffalo, water ox, Asiatic buffalo, Bubalus bubalis",55,"hyena, hyaena",5,True,False,False,False,False,True,False
+269,24121,cassette player,CD player,"radio, wireless",52,tape player,9,False,False,False,False,False,False,False
+270,48809,"promontory, headland, head, foreland","promontory, headland, head, foreland","promontory, headland, head, foreland",95,"promontory, headland, head, foreland",24,True,True,True,True,True,True,True
+271,17820,weasel,marmot,marmot,47,marmot,22,True,True,False,False,False,True,True
+272,1122,"bald eagle, American eagle, Haliaeetus leucocephalus","bald eagle, American eagle, Haliaeetus leucocephalus","bald eagle, American eagle, Haliaeetus leucocephalus",62,"bald eagle, American eagle, Haliaeetus leucocephalus",32,True,True,True,True,True,True,True
+273,11264,malinois,malinois,malinois,95,malinois,25,True,True,True,True,True,True,True
+274,30579,jigsaw puzzle,jigsaw puzzle,jigsaw puzzle,63,jigsaw puzzle,21,True,True,True,True,True,True,True
+275,45464,wok,strainer,strainer,47,strainer,14,True,True,False,False,False,True,True
+276,48216,potpie,potpie,potpie,99,potpie,37,True,True,True,True,True,True,True
+277,43044,"tobacco shop, tobacconist shop, tobacconist","tobacco shop, tobacconist shop, tobacconist","tobacco shop, tobacconist shop, tobacconist",64,"tobacco shop, tobacconist shop, tobacconist",21,True,True,True,True,True,True,True
+278,15656,"walking stick, walkingstick, stick insect","walking stick, walkingstick, stick insect","walking stick, walkingstick, stick insect",69,"walking stick, walkingstick, stick insect",29,True,True,True,True,True,True,True
+279,1900,banded gecko,alligator lizard,alligator lizard,54,alligator lizard,16,True,True,False,False,False,True,True
+280,147,"great white shark, white shark, man-eater, man-eating shark, Carcharodon carcharias","tiger shark, Galeocerdo cuvieri","tiger shark, Galeocerdo cuvieri",57,"great white shark, white shark, man-eater, man-eating shark, Carcharodon carcharias",19,True,False,False,False,True,True,False
+281,29642,"hard disc, hard disk, fixed disk","hard disc, hard disk, fixed disk","hard disc, hard disk, fixed disk",100,"hard disc, hard disk, fixed disk",54,True,True,True,True,True,True,True
+282,3211,green mamba,"green snake, grass snake","green snake, grass snake",75,"green snake, grass snake",30,True,True,False,False,False,True,True
+283,43850,turnstile,"tricycle, trike, velocipede","tricycle, trike, velocipede",30,turnstile,10,True,False,False,False,True,True,False
+284,2354,"African chameleon, Chamaeleo chamaeleon","African chameleon, Chamaeleo chamaeleon","African chameleon, Chamaeleo chamaeleon",72,"African chameleon, Chamaeleo chamaeleon",31,True,True,True,True,True,True,True
+285,31520,Loafer,Loafer,Loafer,85,Loafer,11,True,True,True,True,True,True,True
+286,42583,"television, television system","mailbox, letter box","radio, wireless",30,pencil sharpener,7,False,False,False,False,False,False,False
+287,43337,tractor,tractor,tractor,97,tractor,24,True,True,True,True,True,True,True
+288,45284,window shade,window shade,window shade,61,window screen,11,True,False,True,True,False,True,False
+289,46956,"zucchini, courgette","zucchini, courgette","zucchini, courgette",97,"zucchini, courgette",42,True,True,True,True,True,True,True
+290,48790,"lakeside, lakeshore","paddle, boat paddle",rugby ball,31,"lakeside, lakeshore",3,False,False,False,False,True,False,False
+291,36585,"plunger, plumber's helper","plunger, plumber's helper","plunger, plumber's helper",67,"plunger, plumber's helper",56,True,True,True,True,True,True,True
+292,10465,Chesapeake Bay retriever,miniature pinscher,Lakeland terrier,19,miniature pinscher,16,False,True,False,False,False,False,True
+293,7821,Blenheim spaniel,Blenheim spaniel,"cocker spaniel, English cocker spaniel, cocker",56,"cocker spaniel, English cocker spaniel, cocker",19,False,False,True,False,False,False,False
+294,7205,pelican,pelican,"limpkin, Aramus pictus",30,pelican,19,False,True,True,False,True,False,True
+295,6413,"black stork, Ciconia nigra","black stork, Ciconia nigra","black stork, Ciconia nigra",61,"black stork, Ciconia nigra",24,True,True,True,True,True,True,True
+296,34046,nipple,nipple,nipple,100,nipple,100,True,True,True,True,True,True,True
+297,12728,"pug, pug-dog","pug, pug-dog","Pekinese, Pekingese, Peke",30,"pug, pug-dog",13,False,True,True,False,True,False,True
+298,6925,bustard,bustard,bustard,95,bustard,33,True,True,True,True,True,True,True
+299,27995,folding chair,folding chair,folding chair,95,folding chair,27,True,True,True,True,True,True,True
+300,37612,"racket, racquet",soccer ball,football helmet,29,football helmet,13,False,False,False,False,False,False,False
+301,39483,shoji,shoji,shoji,92,shoji,35,True,True,True,True,True,True,True
+302,3016,"night snake, Hypsiglena torquata","grocery store, grocery, food market, market","grocery store, grocery, food market, market",53,"pajama, pyjama, pj's, jammies",8,True,False,False,False,False,True,False
+303,1640,"tailed frog, bell toad, ribbed toad, tailed toad, Ascaphus trui","tailed frog, bell toad, ribbed toad, tailed toad, Ascaphus trui","bullfrog, Rana catesbeiana",64,"bullfrog, Rana catesbeiana",16,False,False,True,False,False,False,False
+304,8883,"Scottish deerhound, deerhound","Scottish deerhound, deerhound","Scottish deerhound, deerhound",31,"Scottish deerhound, deerhound",10,True,True,True,True,True,True,True
+305,37601,"racket, racquet","racket, racquet","racket, racquet",100,"racket, racquet",15,True,True,True,True,True,True,True
+306,12969,Pomeranian,Pomeranian,keeshond,38,Pomeranian,26,False,True,True,False,True,False,True
+307,23463,"caldron, cauldron","caldron, cauldron","caldron, cauldron",44,"caldron, cauldron",7,True,True,True,True,True,True,True
+308,15757,"mantis, mantid","mantis, mantid","mantis, mantid",64,"mantis, mantid",16,True,True,True,True,True,True,True
+309,44076,"upright, upright piano","upright, upright piano","upright, upright piano",95,"upright, upright piano",46,True,True,True,True,True,True,True
+310,4086,ptarmigan,ptarmigan,ptarmigan,75,ptarmigan,36,True,True,True,True,True,True,True
+311,508,"brambling, Fringilla montifringilla","brambling, Fringilla montifringilla","brambling, Fringilla montifringilla",88,"brambling, Fringilla montifringilla",36,True,True,True,True,True,True,True
+312,6354,"white stork, Ciconia ciconia","white stork, Ciconia ciconia","white stork, Ciconia ciconia",100,"white stork, Ciconia ciconia",54,True,True,True,True,True,True,True
+313,29644,"hard disc, hard disk, fixed disk","hard disc, hard disk, fixed disk",combination lock,44,"hard disc, hard disk, fixed disk",12,False,True,True,False,True,False,True
+314,20815,"balance beam, beam","balance beam, beam","balance beam, beam",89,"balance beam, beam",27,True,True,True,True,True,True,True
+315,6234,"crayfish, crawfish, crawdad, crawdaddy","crayfish, crawfish, crawdad, crawdaddy",scorpion,84,scorpion,16,False,False,True,False,False,False,False
+316,31989,"maillot, tank suit",maillot,maillot,93,maillot,25,True,True,False,False,False,True,True
+317,12995,Pomeranian,Pomeranian,Pomeranian,95,Pomeranian,35,True,True,True,True,True,True,True
+318,42501,"teddy, teddy bear","teddy, teddy bear","teddy, teddy bear",53,"teddy, teddy bear",14,True,True,True,True,True,True,True
+319,38920,"scale, weighing machine","butcher shop, meat market","scale, weighing machine",32,"butcher shop, meat market",7,False,True,False,True,False,False,True
+320,262,"electric ray, crampfish, numbfish, torpedo",ladle,mortar,28,ladle,7,False,True,False,False,False,False,True
+321,7891,papillon,papillon,papillon,49,papillon,17,True,True,True,True,True,True,True
+322,10527,German short-haired pointer,Chesapeake Bay retriever,Chesapeake Bay retriever,64,Chesapeake Bay retriever,15,True,True,False,False,False,True,True
+323,18600,baboon,baboon,baboon,100,baboon,45,True,True,True,True,True,True,True
+324,24114,cassette player,tape player,tape player,42,agaric,4,True,False,False,False,False,True,False
+325,33498,mosquito net,mosquito net,mosquito net,100,mosquito net,39,True,True,True,True,True,True,True
+326,13471,"timber wolf, grey wolf, gray wolf, Canis lupus","timber wolf, grey wolf, gray wolf, Canis lupus","timber wolf, grey wolf, gray wolf, Canis lupus",92,"timber wolf, grey wolf, gray wolf, Canis lupus",26,True,True,True,True,True,True,True
+327,31725,"lumbermill, sawmill","lumbermill, sawmill","lumbermill, sawmill",65,"lumbermill, sawmill",16,True,True,True,True,True,True,True
+328,23690,"can opener, tin opener","can opener, tin opener","can opener, tin opener",50,"swab, swob, mop",7,True,False,True,True,False,True,False
+329,10557,"vizsla, Hungarian pointer","Ibizan hound, Ibizan Podenco","Ibizan hound, Ibizan Podenco",37,"vizsla, Hungarian pointer",17,True,False,False,False,True,True,False
+330,6556,"little blue heron, Egretta caerulea","little blue heron, Egretta caerulea","little blue heron, Egretta caerulea",46,"little blue heron, Egretta caerulea",45,True,True,True,True,True,True,True
+331,45577,"wool, woolen, woollen",mitten,mitten,87,mitten,51,True,True,False,False,False,True,True
+332,41503,stretcher,stretcher,stretcher,99,stretcher,41,True,True,True,True,True,True,True
+333,27872,"flagpole, flagstaff","flagpole, flagstaff","flagpole, flagstaff",80,"flagpole, flagstaff",17,True,True,True,True,True,True,True
+334,10810,"clumber, clumber spaniel","clumber, clumber spaniel","clumber, clumber spaniel",77,"clumber, clumber spaniel",36,True,True,True,True,True,True,True
+335,38214,rifle,"revolver, six-gun, six-shooter","revolver, six-gun, six-shooter",95,"revolver, six-gun, six-shooter",20,True,True,False,False,False,True,True
+336,11730,Rottweiler,Rottweiler,Rottweiler,90,Rottweiler,30,True,True,True,True,True,True,True
+337,27438,entertainment center,entertainment center,entertainment center,78,entertainment center,10,True,True,True,True,True,True,True
+338,21779,"bathtub, bathing tub, bath, tub","barrow, garden cart, lawn cart, wheelbarrow","barrow, garden cart, lawn cart, wheelbarrow",65,"barrow, garden cart, lawn cart, wheelbarrow",11,True,True,False,False,False,True,True
+339,34079,"notebook, notebook computer","laptop, laptop computer","ice lolly, lolly, lollipop, popsicle",24,rhinoceros beetle,6,False,False,False,False,False,False,False
+340,22915,"brass, memorial tablet, plaque","brass, memorial tablet, plaque","brass, memorial tablet, plaque",99,"brass, memorial tablet, plaque",29,True,True,True,True,True,True,True
+341,8085,"basset, basset hound","bloodhound, sleuthhound","basset, basset hound",35,"bloodhound, sleuthhound",16,False,True,False,True,False,False,True
+342,43467,trench coat,abaya,trench coat,61,abaya,14,False,True,False,True,False,False,True
+343,14709,"brown bear, bruin, Ursus arctos","American black bear, black bear, Ursus americanus, Euarctos americanus","American black bear, black bear, Ursus americanus, Euarctos americanus",68,"American black bear, black bear, Ursus americanus, Euarctos americanus",38,True,True,False,False,False,True,True
+344,15466,bee,honeycomb,"cockroach, roach",53,honeycomb,24,False,True,False,False,False,False,True
+345,37172,"prison, prison house","prison, prison house","prison, prison house",100,"prison, prison house",52,True,True,True,True,True,True,True
+346,28748,golf ball,golf ball,golf ball,100,golf ball,69,True,True,True,True,True,True,True
+347,3104,"rock python, rock snake, Python sebae","rock python, rock snake, Python sebae","rock python, rock snake, Python sebae",83,"rock python, rock snake, Python sebae",30,True,True,True,True,True,True,True
+348,708,"indigo bunting, indigo finch, indigo bird, Passerina cyanea","indigo bunting, indigo finch, indigo bird, Passerina cyanea","indigo bunting, indigo finch, indigo bird, Passerina cyanea",93,"indigo bunting, indigo finch, indigo bird, Passerina cyanea",33,True,True,True,True,True,True,True
+349,38385,"rubber eraser, rubber, pencil eraser",drumstick,drumstick,81,drumstick,29,True,True,False,False,False,True,True
+350,23444,"cab, hack, taxi, taxicab","cab, hack, taxi, taxicab","cab, hack, taxi, taxicab",84,"cab, hack, taxi, taxicab",30,True,True,True,True,True,True,True
+351,26510,digital clock,digital clock,digital clock,98,digital clock,20,True,True,True,True,True,True,True
+352,8466,"borzoi, Russian wolfhound","borzoi, Russian wolfhound","borzoi, Russian wolfhound",56,"borzoi, Russian wolfhound",47,True,True,True,True,True,True,True
+353,6230,"crayfish, crawfish, crawdad, crawdaddy","rock crab, Cancer irroratus","rock crab, Cancer irroratus",73,isopod,15,True,False,False,False,False,True,False
+354,46358,trifle,trifle,trifle,55,trifle,21,True,True,True,True,True,True,True
+355,39357,"shield, buckler","shield, buckler","shield, buckler",100,"shield, buckler",63,True,True,True,True,True,True,True
+356,16386,"starfish, sea star","starfish, sea star","starfish, sea star",99,"starfish, sea star",66,True,True,True,True,True,True,True
+357,34165,"oboe, hautboy, hautbois","flute, transverse flute","flute, transverse flute",74,"marimba, xylophone",12,True,False,False,False,False,True,False
+358,4168,"prairie chicken, prairie grouse, prairie fowl","prairie chicken, prairie grouse, prairie fowl","prairie chicken, prairie grouse, prairie fowl",95,"prairie chicken, prairie grouse, prairie fowl",24,True,True,True,True,True,True,True
+359,5803,"chiton, coat-of-mail shell, sea cradle, polyplacophore","chiton, coat-of-mail shell, sea cradle, polyplacophore","chiton, coat-of-mail shell, sea cradle, polyplacophore",58,"chiton, coat-of-mail shell, sea cradle, polyplacophore",30,True,True,True,True,True,True,True
+360,12753,Leonberg,Leonberg,Leonberg,99,Leonberg,41,True,True,True,True,True,True,True
+361,2189,"frilled lizard, Chlamydosaurus kingi","frilled lizard, Chlamydosaurus kingi","frilled lizard, Chlamydosaurus kingi",75,"frilled lizard, Chlamydosaurus kingi",22,True,True,True,True,True,True,True
+362,12187,bull mastiff,bull mastiff,"Staffordshire bullterrier, Staffordshire bull terrier",40,bull mastiff,13,False,True,True,False,True,False,True
+363,31727,"lumbermill, sawmill","lumbermill, sawmill","lumbermill, sawmill",82,"lumbermill, sawmill",23,True,True,True,True,True,True,True
+364,19245,"indri, indris, Indri indri, Indri brevicaudatus","indri, indris, Indri indri, Indri brevicaudatus","colobus, colobus monkey",71,baboon,7,False,False,True,False,False,False,False
+365,37866,"recreational vehicle, RV, R.V.","recreational vehicle, RV, R.V.","recreational vehicle, RV, R.V.",100,"recreational vehicle, RV, R.V.",53,True,True,True,True,True,True,True
+366,43514,"tricycle, trike, velocipede",maraca,"tricycle, trike, velocipede",35,maraca,4,False,True,False,True,False,False,True
+367,8718,"Norwegian elkhound, elkhound","Norwegian elkhound, elkhound","Norwegian elkhound, elkhound",55,"Norwegian elkhound, elkhound",23,True,True,True,True,True,True,True
+368,28824,gondola,boathouse,boathouse,87,boathouse,24,True,True,False,False,False,True,True
+369,24468,chainlink fence,chainlink fence,"worm fence, snake fence, snake-rail fence, Virginia fence",59,chainlink fence,18,False,True,True,False,True,False,True
+370,48252,burrito,bolete,burrito,25,bolete,9,False,True,False,True,False,False,True
+371,7201,pelican,pelican,pelican,100,pelican,44,True,True,True,True,True,True,True
+372,9282,Norfolk terrier,Norfolk terrier,Norfolk terrier,91,Norfolk terrier,28,True,True,True,True,True,True,True
+373,26820,"dock, dockage, docking facility","dock, dockage, docking facility","dock, dockage, docking facility",48,boathouse,18,True,False,True,True,False,True,False
+374,27373,electric locomotive,electric locomotive,electric locomotive,69,fireboat,10,True,False,True,True,False,True,False
+375,22492,boathouse,boathouse,boathouse,100,boathouse,75,True,True,True,True,True,True,True
+376,45637,"worm fence, snake fence, snake-rail fence, Virginia fence",barn,"worm fence, snake fence, snake-rail fence, Virginia fence",70,barn,21,False,True,False,True,False,False,True
+377,45879,comic book,comic book,comic book,100,comic book,55,True,True,True,True,True,True,True
+378,29339,half track,"tow truck, tow car, wrecker",half track,47,half track,11,False,False,False,True,True,False,False
+379,46547,French loaf,French loaf,"bagel, beigel",47,"bagel, beigel",17,False,False,True,False,False,False,False
+380,10803,"clumber, clumber spaniel","clumber, clumber spaniel","clumber, clumber spaniel",99,"clumber, clumber spaniel",41,True,True,True,True,True,True,True
+381,20964,Band Aid,Band Aid,Band Aid,98,Band Aid,32,True,True,True,True,True,True,True
+382,30032,"hook, claw",trombone,"French horn, horn",41,"French horn, horn",9,False,False,False,False,False,False,False
+383,5222,"wallaby, brush kangaroo","wallaby, brush kangaroo","wallaby, brush kangaroo",92,"wallaby, brush kangaroo",22,True,True,True,True,True,True,True
+384,659,"junco, snowbird","junco, snowbird","junco, snowbird",94,"junco, snowbird",49,True,True,True,True,True,True,True
+385,33245,monitor,desk,"notebook, notebook computer",56,"notebook, notebook computer",6,False,False,False,False,False,False,False
+386,5865,"chambered nautilus, pearly nautilus, nautilus","chambered nautilus, pearly nautilus, nautilus","chambered nautilus, pearly nautilus, nautilus",98,"chambered nautilus, pearly nautilus, nautilus",35,True,True,True,True,True,True,True
+387,48871,"sandbar, sand bar","sandbar, sand bar","sandbar, sand bar",44,"cliff, drop, drop-off",10,True,False,True,True,False,True,False
+388,22985,"brassiere, bra, bandeau",hair slide,hair slide,83,"starfish, sea star",7,True,False,False,False,False,True,False
+389,28880,"gong, tam-tam","gong, tam-tam","gong, tam-tam",92,"gong, tam-tam",34,True,True,True,True,True,True,True
+390,47087,acorn squash,acorn squash,acorn squash,68,acorn squash,20,True,True,True,True,True,True,True
+391,26527,digital clock,digital clock,digital clock,89,digital clock,22,True,True,True,True,True,True,True
+392,9647,"cairn, cairn terrier",Norfolk terrier,Norfolk terrier,42,"Scotch terrier, Scottish terrier, Scottie",9,True,False,False,False,False,True,False
+393,49545,"buckeye, horse chestnut, conker","buckeye, horse chestnut, conker","buckeye, horse chestnut, conker",91,"buckeye, horse chestnut, conker",68,True,True,True,True,True,True,True
+394,32374,measuring cup,measuring cup,measuring cup,47,mortar,7,True,False,True,True,False,True,False
+395,26158,crutch,crutch,crutch,44,crutch,29,True,True,True,True,True,True,True
+396,11711,Rottweiler,Rottweiler,Rottweiler,70,Rottweiler,15,True,True,True,True,True,True,True
+397,27238,Dutch oven,Dutch oven,Dutch oven,89,Dutch oven,12,True,True,True,True,True,True,True
+398,18353,"chimpanzee, chimp, Pan troglodytes","chimpanzee, chimp, Pan troglodytes","chimpanzee, chimp, Pan troglodytes",82,"chimpanzee, chimp, Pan troglodytes",17,True,True,True,True,True,True,True
+399,49514,"buckeye, horse chestnut, conker","buckeye, horse chestnut, conker","buckeye, horse chestnut, conker",95,"buckeye, horse chestnut, conker",56,True,True,True,True,True,True,True
+400,21724,bath towel,bath towel,bath towel,32,bath towel,20,True,True,True,True,True,True,True
+401,25924,crash helmet,crash helmet,crash helmet,98,crash helmet,49,True,True,True,True,True,True,True
+402,41389,stove,stove,stove,92,stove,41,True,True,True,True,True,True,True
+403,4772,jacamar,jacamar,jacamar,94,jacamar,25,True,True,True,True,True,True,True
+404,35204,parking meter,"pay-phone, pay-station","pay-phone, pay-station",85,"pay-phone, pay-station",31,True,True,False,False,False,True,True
+405,27878,"flagpole, flagstaff",tile roof,"church, church building",56,tile roof,13,False,True,False,False,False,False,True
+406,5874,"chambered nautilus, pearly nautilus, nautilus","chambered nautilus, pearly nautilus, nautilus","chambered nautilus, pearly nautilus, nautilus",88,"chambered nautilus, pearly nautilus, nautilus",47,True,True,True,True,True,True,True
+407,17804,weasel,weasel,weasel,83,weasel,14,True,True,True,True,True,True,True
+408,34223,"ocarina, sweet potato","ocarina, sweet potato","ocarina, sweet potato",98,"ocarina, sweet potato",62,True,True,True,True,True,True,True
+409,7841,Blenheim spaniel,Blenheim spaniel,Blenheim spaniel,75,Blenheim spaniel,39,True,True,True,True,True,True,True
+410,15922,"lacewing, lacewing fly","lacewing, lacewing fly","lacewing, lacewing fly",71,"lacewing, lacewing fly",35,True,True,True,True,True,True,True
+411,28366,"frying pan, frypan, skillet","frying pan, frypan, skillet","frying pan, frypan, skillet",92,"frying pan, frypan, skillet",41,True,True,True,True,True,True,True
+412,12083,EntleBucher,Greater Swiss Mountain dog,Greater Swiss Mountain dog,50,Greater Swiss Mountain dog,20,True,True,False,False,False,True,True
+413,20033,"academic gown, academic robe, judge's robe","academic gown, academic robe, judge's robe","academic gown, academic robe, judge's robe",59,"handkerchief, hankie, hanky, hankey",6,True,False,True,True,False,True,False
+414,14487,"snow leopard, ounce, Panthera uncia","snow leopard, ounce, Panthera uncia","snow leopard, ounce, Panthera uncia",98,"snow leopard, ounce, Panthera uncia",34,True,True,True,True,True,True,True
+415,20818,"balance beam, beam","balance beam, beam","balance beam, beam",95,"balance beam, beam",42,True,True,True,True,True,True,True
+416,37517,"quilt, comforter, comfort, puff",window shade,window shade,36,window shade,11,True,True,False,False,False,True,True
+417,44235,vault,dome,vault,45,dome,13,False,True,False,True,False,False,True
+418,48650,coral reef,coral reef,coral reef,85,coral reef,12,True,True,True,True,True,True,True
+419,36235,"pirate, pirate ship","pirate, pirate ship","pirate, pirate ship",57,"pirate, pirate ship",9,True,True,True,True,True,True,True
+420,21069,"bannister, banister, balustrade, balusters, handrail","bannister, banister, balustrade, balusters, handrail","bannister, banister, balustrade, balusters, handrail",100,"bannister, banister, balustrade, balusters, handrail",28,True,True,True,True,True,True,True
+421,9523,"Sealyham terrier, Sealyham","Sealyham terrier, Sealyham","Sealyham terrier, Sealyham",55,"clumber, clumber spaniel",17,True,False,True,True,False,True,False
+422,32755,"miniskirt, mini",apron,apron,97,apron,36,True,True,False,False,False,True,True
+423,12053,EntleBucher,Appenzeller,Appenzeller,75,Appenzeller,14,True,True,False,False,False,True,True
+424,23593,cannon,turnstile,turnstile,60,turnstile,9,True,True,False,False,False,True,True
+425,8037,"Afghan hound, Afghan",briard,briard,79,briard,19,True,True,False,False,False,True,True
+426,46976,"zucchini, courgette","pot, flowerpot","pot, flowerpot",54,"pot, flowerpot",26,True,True,False,False,False,True,True
+427,16399,"starfish, sea star","starfish, sea star","starfish, sea star",97,"starfish, sea star",31,True,True,True,True,True,True,True
+428,45785,yurt,yurt,yurt,97,yurt,50,True,True,True,True,True,True,True
+429,34615,packet,packet,packet,80,packet,11,True,True,True,True,True,True,True
+430,7624,Japanese spaniel,papillon,papillon,58,papillon,20,True,True,False,False,False,True,True
+431,13661,"dingo, warrigal, warragal, Canis dingo","dingo, warrigal, warragal, Canis dingo","dhole, Cuon alpinus",51,"dingo, warrigal, warragal, Canis dingo",38,False,True,True,False,True,False,True
+432,37736,"radio, wireless","radio, wireless","radio, wireless",94,"radio, wireless",33,True,True,True,True,True,True,True
+433,26541,digital clock,"megalith, megalithic structure","megalith, megalithic structure",36,"megalith, megalithic structure",11,True,True,False,False,False,True,True
+434,13267,toy poodle,toy poodle,toy poodle,58,toy poodle,18,True,True,True,True,True,True,True
+435,18082,"skunk, polecat, wood pussy","skunk, polecat, wood pussy","skunk, polecat, wood pussy",70,"skunk, polecat, wood pussy",37,True,True,True,True,True,True,True
+436,48085,dough,dough,dough,88,dough,19,True,True,True,True,True,True,True
+437,42767,thimble,thimble,mushroom,60,thimble,26,False,True,True,False,True,False,True
+438,4070,ptarmigan,ptarmigan,ptarmigan,99,ptarmigan,37,True,True,True,True,True,True,True
+439,16286,"sulphur butterfly, sulfur butterfly","sulphur butterfly, sulfur butterfly","sulphur butterfly, sulfur butterfly",100,"sulphur butterfly, sulfur butterfly",67,True,True,True,True,True,True,True
+440,1118,"bald eagle, American eagle, Haliaeetus leucocephalus","bald eagle, American eagle, Haliaeetus leucocephalus","bald eagle, American eagle, Haliaeetus leucocephalus",90,"bald eagle, American eagle, Haliaeetus leucocephalus",32,True,True,True,True,True,True,True
+441,10074,"silky terrier, Sydney silky","silky terrier, Sydney silky","silky terrier, Sydney silky",60,"silky terrier, Sydney silky",19,True,True,True,True,True,True,True
+442,11373,kelpie,kelpie,kelpie,38,kelpie,25,True,True,True,True,True,True,True
+443,32684,milk can,milk can,milk can,98,milk can,36,True,True,True,True,True,True,True
+444,46433,"ice cream, icecream","ice cream, icecream","ice cream, icecream",65,"ice cream, icecream",17,True,True,True,True,True,True,True
+445,25349,"coil, spiral, volute, whorl, helix","coil, spiral, volute, whorl, helix","coil, spiral, volute, whorl, helix",85,"coil, spiral, volute, whorl, helix",23,True,True,True,True,True,True,True
+446,6715,crane,crane,crane,72,"little blue heron, Egretta caerulea",14,True,False,True,True,False,True,False
+447,34567,oxygen mask,oxygen mask,oxygen mask,100,oxygen mask,42,True,True,True,True,True,True,True
+448,1030,"water ouzel, dipper","water ouzel, dipper","water ouzel, dipper",80,"water ouzel, dipper",33,True,True,True,True,True,True,True
+449,22753,bottlecap,bottlecap,bottlecap,96,bottlecap,10,True,True,True,True,True,True,True
+450,11761,"German shepherd, German shepherd dog, German police dog, alsatian","German shepherd, German shepherd dog, German police dog, alsatian","German shepherd, German shepherd dog, German police dog, alsatian",81,"German shepherd, German shepherd dog, German police dog, alsatian",29,True,True,True,True,True,True,True
+451,35896,"pickup, pickup truck","pickup, pickup truck","pickup, pickup truck",99,"pickup, pickup truck",28,True,True,True,True,True,True,True
+452,14492,"snow leopard, ounce, Panthera uncia","snow leopard, ounce, Panthera uncia","snow leopard, ounce, Panthera uncia",51,"snow leopard, ounce, Panthera uncia",16,True,True,True,True,True,True,True
+453,25085,cloak,abaya,abaya,86,abaya,44,True,True,False,False,False,True,True
+454,20395,ambulance,ambulance,ambulance,59,ambulance,19,True,True,True,True,True,True,True
+455,4813,toucan,toucan,hornbill,64,toucan,46,False,True,True,False,True,False,True
+456,8994,"Staffordshire bullterrier, Staffordshire bull terrier",muzzle,muzzle,63,muzzle,10,True,True,False,False,False,True,True
+457,49691,gyromitra,gyromitra,gyromitra,100,gyromitra,58,True,True,True,True,True,True,True
+458,21374,"barrel, cask","barrel, cask","barrel, cask",100,"barrel, cask",55,True,True,True,True,True,True,True
+459,30242,hourglass,hourglass,hourglass,100,hourglass,94,True,True,True,True,True,True,True
+460,47578,lemon,lemon,lemon,100,lemon,53,True,True,True,True,True,True,True
+461,1164,vulture,vulture,vulture,96,vulture,36,True,True,True,True,True,True,True
+462,24810,Christmas stocking,Christmas stocking,Christmas stocking,93,Christmas stocking,25,True,True,True,True,True,True,True
+463,21109,barbell,"punching bag, punch bag, punching ball, punchball",barbell,31,"hippopotamus, hippo, river horse, Hippopotamus amphibius",5,False,False,False,True,False,False,False
+464,3697,"barn spider, Araneus cavaticus","barn spider, Araneus cavaticus","barn spider, Araneus cavaticus",33,"wolf spider, hunting spider",14,True,False,True,True,False,True,False
+465,11438,komondor,"Tibetan terrier, chrysanthemum dog",miniature poodle,23,komondor,6,False,False,False,False,True,False,False
+466,4469,"sulphur-crested cockatoo, Kakatoe galerita, Cacatua galerita","sulphur-crested cockatoo, Kakatoe galerita, Cacatua galerita","sulphur-crested cockatoo, Kakatoe galerita, Cacatua galerita",87,"sulphur-crested cockatoo, Kakatoe galerita, Cacatua galerita",59,True,True,True,True,True,True,True
+467,9807,miniature schnauzer,West Highland white terrier,West Highland white terrier,81,West Highland white terrier,24,True,True,False,False,False,True,True
+468,47767,"jackfruit, jak, jack","jackfruit, jak, jack","jackfruit, jak, jack",100,"jackfruit, jak, jack",76,True,True,True,True,True,True,True
+469,6748,crane,crane,crane,57,crane,27,True,True,True,True,True,True,True
+470,49184,scuba diver,scuba diver,snorkel,93,scuba diver,23,False,True,True,False,True,False,True
+471,17378,bison,bison,bison,95,bison,29,True,True,True,True,True,True,True
+472,36884,"pop bottle, soda bottle","pop bottle, soda bottle","pop bottle, soda bottle",79,"pop bottle, soda bottle",33,True,True,True,True,True,True,True
+473,13356,standard poodle,Shih-Tzu,"cocker spaniel, English cocker spaniel, cocker",50,"Old English sheepdog, bobtail",14,False,False,False,False,False,False,False
+474,32404,"medicine chest, medicine cabinet","medicine chest, medicine cabinet","medicine chest, medicine cabinet",97,"medicine chest, medicine cabinet",29,True,True,True,True,True,True,True
+475,42454,teapot,teapot,teapot,92,teapot,14,True,True,True,True,True,True,True
+476,46065,"book jacket, dust cover, dust jacket, dust wrapper","book jacket, dust cover, dust jacket, dust wrapper","book jacket, dust cover, dust jacket, dust wrapper",92,"book jacket, dust cover, dust jacket, dust wrapper",18,True,True,True,True,True,True,True
+477,11538,"Shetland sheepdog, Shetland sheep dog, Shetland","Shetland sheepdog, Shetland sheep dog, Shetland","Shetland sheepdog, Shetland sheep dog, Shetland",59,"Shetland sheepdog, Shetland sheep dog, Shetland",23,True,True,True,True,True,True,True
+478,2008,"American chameleon, anole, Anolis carolinensis","green lizard, Lacerta viridis","green lizard, Lacerta viridis",100,"green lizard, Lacerta viridis",16,True,True,False,False,False,True,True
+479,3221,green mamba,"green snake, grass snake","green snake, grass snake",41,green mamba,25,True,False,False,False,True,True,False
+480,44996,water jug,water bottle,water bottle,67,water bottle,29,True,True,False,False,False,True,True
+481,18762,"colobus, colobus monkey","colobus, colobus monkey","colobus, colobus monkey",48,"guenon, guenon monkey",19,True,False,True,True,False,True,False
+482,14165,Persian cat,Persian cat,Persian cat,77,Persian cat,12,True,True,True,True,True,True,True
+483,40683,spatula,spatula,ladle,56,spatula,44,False,True,True,False,True,False,True
+484,25080,cloak,cloak,cloak,69,cloak,13,True,True,True,True,True,True,True
+485,1822,terrapin,terrapin,terrapin,86,terrapin,12,True,True,True,True,True,True,True
+486,44661,"wallet, billfold, notecase, pocketbook","wallet, billfold, notecase, pocketbook","wallet, billfold, notecase, pocketbook",98,"wallet, billfold, notecase, pocketbook",23,True,True,True,True,True,True,True
+487,6848,"European gallinule, Porphyrio porphyrio","European gallinule, Porphyrio porphyrio","European gallinule, Porphyrio porphyrio",95,"European gallinule, Porphyrio porphyrio",31,True,True,True,True,True,True,True
+488,12635,"affenpinscher, monkey pinscher, monkey dog","affenpinscher, monkey pinscher, monkey dog",Brabancon griffon,57,Brabancon griffon,27,False,False,True,False,False,False,False
+489,37668,radiator,radiator,radiator,63,radiator,15,True,True,True,True,True,True,True
+490,6095,"king crab, Alaska crab, Alaskan king crab, Alaska king crab, Paralithodes camtschatica","king crab, Alaska crab, Alaskan king crab, Alaska king crab, Paralithodes camtschatica","king crab, Alaska crab, Alaskan king crab, Alaska king crab, Paralithodes camtschatica",94,"king crab, Alaska crab, Alaskan king crab, Alaska king crab, Paralithodes camtschatica",17,True,True,True,True,True,True,True
+491,39248,screwdriver,screwdriver,screwdriver,32,screwdriver,11,True,True,True,True,True,True,True
+492,10577,"vizsla, Hungarian pointer","vizsla, Hungarian pointer","vizsla, Hungarian pointer",70,"vizsla, Hungarian pointer",15,True,True,True,True,True,True,True
+493,31074,"lawn mower, mower","lawn mower, mower","lawn mower, mower",92,"lawn mower, mower",51,True,True,True,True,True,True,True
+494,29112,"grocery store, grocery, food market, market","grocery store, grocery, food market, market","grocery store, grocery, food market, market",89,"grocery store, grocery, food market, market",13,True,True,True,True,True,True,True
+495,10192,West Highland white terrier,West Highland white terrier,West Highland white terrier,99,West Highland white terrier,45,True,True,True,True,True,True,True
+496,314,stingray,stingray,stingray,93,stingray,44,True,True,True,True,True,True,True
+497,11449,komondor,komondor,Lakeland terrier,33,komondor,33,False,True,True,False,True,False,True
+498,30745,kimono,vestment,sarong,42,shower curtain,13,False,False,False,False,False,False,False
+499,29702,harp,guillotine,"marimba, xylophone",32,"marimba, xylophone",14,False,False,False,False,False,False,False
+500,27658,"file, file cabinet, filing cabinet","file, file cabinet, filing cabinet","file, file cabinet, filing cabinet",100,"file, file cabinet, filing cabinet",47,True,True,True,True,True,True,True
