@@ -395,7 +395,7 @@ for loop_i, target_idx in enumerate(TARGET_IDCS):
     final_concepts = get_top_concept_info(cv_smoothed_avg, concept_names, top_k=20)
 
     # --- Baseline: Isotropic Gaussian smoothing (no manifold) ---
-    gauss_sigma = SCALE_WEIGHT * np.sqrt(np.mean(ev))
+    gauss_sigma = SCALE_WEIGHT  # same sigma as manifold for fair comparison
     gauss_preds = []
     gauss_overlap = []
     gauss_example_samples = []
@@ -478,6 +478,15 @@ for loop_i, target_idx in enumerate(TARGET_IDCS):
     # Save detailed viz + JSON only for first N_VIZ images
     # ===================================================================
     if save_viz:
+        # --- Compute shared x-axis limit for bar charts ---
+        gauss_top_concepts_pre = get_top_concept_info(cv_gauss_avg, concept_names, top_k=20)
+        all_bar_values = (
+            [v for _, v in orig_concepts]
+            + [v for _, v in final_concepts]
+            + [v for _, v in gauss_top_concepts_pre]
+        )
+        shared_xlim = max(all_bar_values) * 1.1 if all_bar_values else 1.0
+
         # --- Manifold visualization ---
         fig, axes = plt.subplots(1, 3, figsize=(24, 8))
 
@@ -560,6 +569,7 @@ for loop_i, target_idx in enumerate(TARGET_IDCS):
                      f'{get_class_name(PROBE_DATASET, pred_smooth)} '
                      f'({"STABLE ✓" if pred_orig == pred_smooth else "CHANGED ✗"})',
                      fontsize=12, fontweight='bold')
+        ax.set_xlim(0, shared_xlim)
         ax.legend(fontsize=9); ax.grid(True, axis='x', alpha=0.3)
         plt.tight_layout()
         plt.savefig(os.path.join(manifold_dir, f"idx{target_idx}_manifold.png"), dpi=150, bbox_inches='tight')
@@ -655,6 +665,7 @@ for loop_i, target_idx in enumerate(TARGET_IDCS):
                      f'{get_class_name(PROBE_DATASET, pred_gauss)} '
                      f'({"STABLE ✓" if pred_orig == pred_gauss else "CHANGED ✗"})',
                      fontsize=12, fontweight='bold')
+        ax.set_xlim(0, shared_xlim)
         ax.legend(fontsize=9); ax.grid(True, axis='x', alpha=0.3)
         plt.tight_layout()
         plt.savefig(os.path.join(isotropic_dir, f"idx{target_idx}_isotropic.png"), dpi=150, bbox_inches='tight')
