@@ -87,6 +87,35 @@ def get_top_concept_info(cv, concept_names, top_k=10):
     return results
 
 
+def get_concept_changes(cv_orig, cv_smoothed, concept_names, top_k=10):
+    """Compute top drops, gains, and least activated (originally active) concepts."""
+    diff = np.array(cv_orig) - np.array(cv_smoothed)
+    cv_o = np.array(cv_orig)
+    cv_s = np.array(cv_smoothed)
+    # Top drops: concepts that decreased the most
+    drop_idxs = np.argsort(-diff)[:top_k]  # largest positive diff = biggest drop
+    drops = [(concept_names[i] if concept_names else f"c_{i}",
+              round(float(diff[i]), 4), round(float(cv_o[i]), 4), round(float(cv_s[i]), 4))
+             for i in drop_idxs if diff[i] > 0]
+    # Top gains: concepts that increased the most
+    gain_idxs = np.argsort(diff)[:top_k]  # largest negative diff = biggest gain
+    gains = [(concept_names[i] if concept_names else f"c_{i}",
+              round(float(-diff[i]), 4), round(float(cv_o[i]), 4), round(float(cv_s[i]), 4))
+             for i in gain_idxs if diff[i] < 0]
+    # Least activated: originally active concepts with lowest smoothed activation
+    active_mask = cv_o > 1e-6
+    if active_mask.sum() > 0:
+        active_idxs = np.where(active_mask)[0]
+        active_smoothed = cv_s[active_idxs]
+        order = np.argsort(active_smoothed)[:top_k]
+        least = [(concept_names[active_idxs[j]] if concept_names else f"c_{active_idxs[j]}",
+                  round(float(cv_s[active_idxs[j]]), 4), round(float(cv_o[active_idxs[j]]), 4))
+                 for j in order]
+    else:
+        least = []
+    return drops, gains, least
+
+
 # ===========================================================================
 # Step 1: Load CFM model
 # ===========================================================================
@@ -487,8 +516,12 @@ for loop_i, target_idx in enumerate(TARGET_IDCS):
         )
         shared_xlim = max(all_bar_values) * 1.1 if all_bar_values else 1.0
 
-        # --- Manifold visualization ---
-        fig, axes = plt.subplots(1, 3, figsize=(24, 8))
+        # --- Compute concept changes for both methods ---
+        m_drops, m_gains, m_least = get_concept_changes(cv_orig, cv_smoothed_avg, concept_names, top_k=10)
+        g_drops, g_gains, g_least = get_concept_changes(cv_orig, cv_gauss_avg, concept_names, top_k=10)
+
+        # --- Manifold visualization (2x3 grid) ---
+        fig, axes = plt.subplots(2, 3, figsize=(26, 16))
 
         pca_vis = PCA(n_components=2)
         X_vis = pca_vis.fit_transform(X_neighbors)
@@ -509,9 +542,9 @@ for loop_i, target_idx in enumerate(TARGET_IDCS):
         noisy_vis = pca_vis.transform(np.stack(vis_noisy_points))
         noisy_correct = [p == label_true for p in vis_noisy_preds]
 
-        # Panel 1: Manifold neighborhood
-        ax = axes[0]
-        ax.scatter(X_vis[:, 0], X_vis[:, 1], c='lightblue', s=8, alpha=0.4, label=f'{K_NEIGHBORS} KNN neighbors')
+        # Row 1, Panel 1: Manifold neighborhood
+        ax = axes[0, 0]
+        ax.scatter(X_vis[:, 0], X_vis[:, 1], c='lightblue', s=8, alpha=0.4, label=f'{K_NEIGHBORS} KNN')
         for rank in range(min(5, len(nn_idcs))):
             nn_cv_vis = pca_vis.transform(train_concept_vectors[nn_idcs[rank]].numpy().reshape(1, -1))[0]
             ax.scatter(nn_cv_vis[0], nn_cv_vis[1], c='blue', s=80, marker='D', zorder=5,
@@ -521,17 +554,17 @@ for loop_i, target_idx in enumerate(TARGET_IDCS):
         ax.scatter(orig_vis[0], orig_vis[1], c='red', s=200, marker='*', zorder=10,
                    edgecolors='darkred', linewidths=1.5, label='Target')
         ax.scatter(mean_vis[0], mean_vis[1], c='green', s=100, marker='X', zorder=10,
-                   edgecolors='darkgreen', linewidths=1.5, label='Neighborhood mean')
-        ax.set_title(f'Manifold Neighborhood (2D PCA)\nidx={target_idx}, True: {get_class_name(PROBE_DATASET, label_true)}',
-                     fontsize=12, fontweight='bold')
-        ax.set_xlabel('PC1'); ax.set_ylabel('PC2'); ax.legend(fontsize=9); ax.grid(True, alpha=0.3)
+                   edgecolors='darkgreen', linewidths=1.5, label='Mean')
+        ax.set_title(f'Manifold Neighborhood (PCA)\nTrue: {get_class_name(PROBE_DATASET, label_true)}',
+                     fontsize=11, fontweight='bold')
+        ax.set_xlabel('PC1'); ax.set_ylabel('PC2'); ax.legend(fontsize=8); ax.grid(True, alpha=0.3)
 
-        # Panel 2: Manifold noisy samples
-        ax = axes[1]
+        # Row 1, Panel 2: Manifold noisy samples
+        ax = axes[0, 1]
         ax.scatter(X_vis[:, 0], X_vis[:, 1], c='lightgray', s=5, alpha=0.2)
         colors = ['green' if c else 'orange' for c in noisy_correct]
         ax.scatter(noisy_vis[:, 0], noisy_vis[:, 1], c=colors, s=15, alpha=0.6,
-                   label=f'{N_SMOOTH_SAMPLES} manifold samples')
+                   label=f'{N_SMOOTH_SAMPLES} samples')
         ax.scatter(orig_vis[0], orig_vis[1], c='red', s=200, marker='*', zorder=10,
                    edgecolors='darkred', linewidths=1.5, label='Original')
         cov = np.cov(noisy_vis.T)
@@ -544,11 +577,11 @@ for loop_i, target_idx in enumerate(TARGET_IDCS):
             ax.add_patch(ell)
         n_correct = sum(noisy_correct)
         ax.set_title(f'Manifold Samples (σ={SCALE_WEIGHT})\nCorrect: {n_correct}/{N_SMOOTH_SAMPLES}',
-                     fontsize=12, fontweight='bold')
-        ax.set_xlabel('PC1'); ax.set_ylabel('PC2'); ax.legend(fontsize=9); ax.grid(True, alpha=0.3)
+                     fontsize=11, fontweight='bold')
+        ax.set_xlabel('PC1'); ax.set_ylabel('PC2'); ax.legend(fontsize=8); ax.grid(True, alpha=0.3)
 
-        # Panel 3: Manifold concept bar chart
-        ax = axes[2]
+        # Row 1, Panel 3: Manifold concept bar chart (top activations)
+        ax = axes[0, 2]
         n_show = 20
         orig_top_concepts = get_top_concept_info(cv_orig, concept_names, top_k=n_show)
         final_top_concepts = get_top_concept_info(cv_smoothed_avg, concept_names, top_k=n_show)
@@ -557,20 +590,67 @@ for loop_i, target_idx in enumerate(TARGET_IDCS):
             if n not in all_names: all_names.append(n)
         for n, _ in final_top_concepts:
             if n not in all_names: all_names.append(n)
-        all_names = all_names[:30]
+        all_names = all_names[:25]
         orig_dict = {n: v for n, v in orig_top_concepts}
         final_dict = {n: v for n, v in final_top_concepts}
         y_pos = np.arange(len(all_names))
         ax.barh(y_pos - 0.2, [orig_dict.get(n, 0) for n in all_names], height=0.35, color='steelblue', label='Original', alpha=0.8)
-        ax.barh(y_pos + 0.2, [final_dict.get(n, 0) for n in all_names], height=0.35, color='coral', label=f'Manifold avg', alpha=0.8)
-        ax.set_yticks(y_pos); ax.set_yticklabels([n[:25] for n in all_names], fontsize=9)
+        ax.barh(y_pos + 0.2, [final_dict.get(n, 0) for n in all_names], height=0.35, color='coral', label='Manifold avg', alpha=0.8)
+        ax.set_yticks(y_pos); ax.set_yticklabels([n[:22] for n in all_names], fontsize=8)
         ax.invert_yaxis(); ax.set_xlabel('Activation')
-        ax.set_title(f'Manifold: {get_class_name(PROBE_DATASET, pred_orig)} → '
+        ax.set_title(f'Top Activations: {get_class_name(PROBE_DATASET, pred_orig)} → '
                      f'{get_class_name(PROBE_DATASET, pred_smooth)} '
                      f'({"STABLE ✓" if pred_orig == pred_smooth else "CHANGED ✗"})',
-                     fontsize=12, fontweight='bold')
+                     fontsize=11, fontweight='bold')
         ax.set_xlim(0, shared_xlim)
-        ax.legend(fontsize=9); ax.grid(True, axis='x', alpha=0.3)
+        ax.legend(fontsize=8); ax.grid(True, axis='x', alpha=0.3)
+
+        # Row 2, Panel 1: Top DROPS (concepts suppressed by smoothing)
+        ax = axes[1, 0]
+        if m_drops:
+            drop_names = [d[0][:22] for d in m_drops[:10]]
+            drop_orig = [d[2] for d in m_drops[:10]]
+            drop_smooth = [d[3] for d in m_drops[:10]]
+            y_d = np.arange(len(drop_names))
+            ax.barh(y_d - 0.2, drop_orig, height=0.35, color='steelblue', label='Original', alpha=0.8)
+            ax.barh(y_d + 0.2, drop_smooth, height=0.35, color='#d32f2f', label='After smoothing', alpha=0.8)
+            ax.set_yticks(y_d); ax.set_yticklabels(drop_names, fontsize=8)
+            ax.invert_yaxis()
+        ax.set_xlabel('Activation'); ax.set_xlim(0, shared_xlim)
+        ax.set_title('Manifold: Top Drops (suppressed)', fontsize=11, fontweight='bold', color='#d32f2f')
+        ax.legend(fontsize=8); ax.grid(True, axis='x', alpha=0.3)
+
+        # Row 2, Panel 2: Top GAINS (concepts boosted by smoothing)
+        ax = axes[1, 1]
+        if m_gains:
+            gain_names = [g[0][:22] for g in m_gains[:10]]
+            gain_orig = [g[2] for g in m_gains[:10]]
+            gain_smooth = [g[3] for g in m_gains[:10]]
+            y_g = np.arange(len(gain_names))
+            ax.barh(y_g - 0.2, gain_orig, height=0.35, color='steelblue', label='Original', alpha=0.8)
+            ax.barh(y_g + 0.2, gain_smooth, height=0.35, color='#2e7d32', label='After smoothing', alpha=0.8)
+            ax.set_yticks(y_g); ax.set_yticklabels(gain_names, fontsize=8)
+            ax.invert_yaxis()
+        ax.set_xlabel('Activation'); ax.set_xlim(0, shared_xlim)
+        ax.set_title('Manifold: Top Gains (boosted)', fontsize=11, fontweight='bold', color='#2e7d32')
+        ax.legend(fontsize=8); ax.grid(True, axis='x', alpha=0.3)
+
+        # Row 2, Panel 3: Least activated (originally active, now weakest)
+        ax = axes[1, 2]
+        if m_least:
+            least_names = [l[0][:22] for l in m_least[:10]]
+            least_orig = [l[2] for l in m_least[:10]]
+            least_smooth = [l[1] for l in m_least[:10]]
+            y_l = np.arange(len(least_names))
+            ax.barh(y_l - 0.2, least_orig, height=0.35, color='steelblue', label='Original', alpha=0.8)
+            ax.barh(y_l + 0.2, least_smooth, height=0.35, color='#757575', label='After smoothing', alpha=0.8)
+            ax.set_yticks(y_l); ax.set_yticklabels(least_names, fontsize=8)
+            ax.invert_yaxis()
+        ax.set_xlabel('Activation'); ax.set_xlim(0, shared_xlim)
+        ax.set_title('Manifold: Least Activated (weakest survivors)', fontsize=11, fontweight='bold', color='#757575')
+        ax.legend(fontsize=8); ax.grid(True, axis='x', alpha=0.3)
+
+        fig.suptitle(f'Manifold Smoothing — idx={target_idx}', fontsize=14, fontweight='bold', y=1.01)
         plt.tight_layout()
         plt.savefig(os.path.join(manifold_dir, f"idx{target_idx}_manifold.png"), dpi=150, bbox_inches='tight')
         plt.close(fig)
@@ -594,12 +674,15 @@ for loop_i, target_idx in enumerate(TARGET_IDCS):
             'top5_neighbors': top5_neighbors_info,
             'example_noisy_samples': example_noisy_samples,
             'final_avg_concepts': [{'name': n, 'value': round(v, 4)} for n, v in final_concepts],
+            'top_drops': [{'name': d[0], 'drop': d[1], 'orig': d[2], 'smoothed': d[3]} for d in m_drops[:10]],
+            'top_gains': [{'name': g[0], 'gain': g[1], 'orig': g[2], 'smoothed': g[3]} for g in m_gains[:10]],
+            'least_activated': [{'name': l[0], 'smoothed': l[1], 'orig': l[2]} for l in m_least[:10]],
         }
         with open(os.path.join(manifold_dir, f"idx{target_idx}_detail.json"), 'w') as f:
             json.dump(manifold_result, f, indent=2)
 
-        # --- Isotropic visualization ---
-        fig, axes = plt.subplots(1, 3, figsize=(24, 8))
+        # --- Isotropic visualization (2x3 grid) ---
+        fig, axes = plt.subplots(2, 3, figsize=(26, 16))
 
         # Generate isotropic noisy points for visualization (project onto same PCA)
         vis_gauss_points = []
@@ -615,21 +698,21 @@ for loop_i, target_idx in enumerate(TARGET_IDCS):
         gauss_vis = pca_vis.transform(np.stack(vis_gauss_points))
         gauss_correct = [p == label_true for p in vis_gauss_preds_list]
 
-        # Panel 1: Same neighborhood for reference
-        ax = axes[0]
-        ax.scatter(X_vis[:, 0], X_vis[:, 1], c='lightblue', s=8, alpha=0.4, label=f'{K_NEIGHBORS} KNN neighbors')
+        # Row 1, Panel 1: Neighborhood reference
+        ax = axes[0, 0]
+        ax.scatter(X_vis[:, 0], X_vis[:, 1], c='lightblue', s=8, alpha=0.4, label=f'{K_NEIGHBORS} KNN')
         ax.scatter(orig_vis[0], orig_vis[1], c='red', s=200, marker='*', zorder=10,
                    edgecolors='darkred', linewidths=1.5, label='Target')
-        ax.set_title(f'Concept Space (2D PCA)\nidx={target_idx}, True: {get_class_name(PROBE_DATASET, label_true)}',
-                     fontsize=12, fontweight='bold')
-        ax.set_xlabel('PC1'); ax.set_ylabel('PC2'); ax.legend(fontsize=9); ax.grid(True, alpha=0.3)
+        ax.set_title(f'Concept Space (PCA)\nTrue: {get_class_name(PROBE_DATASET, label_true)}',
+                     fontsize=11, fontweight='bold')
+        ax.set_xlabel('PC1'); ax.set_ylabel('PC2'); ax.legend(fontsize=8); ax.grid(True, alpha=0.3)
 
-        # Panel 2: Isotropic Gaussian noisy samples
-        ax = axes[1]
+        # Row 1, Panel 2: Isotropic Gaussian noisy samples
+        ax = axes[0, 1]
         ax.scatter(X_vis[:, 0], X_vis[:, 1], c='lightgray', s=5, alpha=0.2)
         colors_g = ['green' if c else 'orange' for c in gauss_correct]
         ax.scatter(gauss_vis[:, 0], gauss_vis[:, 1], c=colors_g, s=15, alpha=0.6,
-                   label=f'{N_SMOOTH_SAMPLES} isotropic samples')
+                   label=f'{N_SMOOTH_SAMPLES} samples')
         ax.scatter(orig_vis[0], orig_vis[1], c='red', s=200, marker='*', zorder=10,
                    edgecolors='darkred', linewidths=1.5, label='Original')
         cov_g = np.cov(gauss_vis.T)
@@ -642,31 +725,78 @@ for loop_i, target_idx in enumerate(TARGET_IDCS):
             ax.add_patch(ell)
         n_correct_g = sum(gauss_correct)
         ax.set_title(f'Isotropic Gaussian (σ={gauss_sigma:.3f})\nCorrect: {n_correct_g}/{N_SMOOTH_SAMPLES}',
-                     fontsize=12, fontweight='bold')
-        ax.set_xlabel('PC1'); ax.set_ylabel('PC2'); ax.legend(fontsize=9); ax.grid(True, alpha=0.3)
+                     fontsize=11, fontweight='bold')
+        ax.set_xlabel('PC1'); ax.set_ylabel('PC2'); ax.legend(fontsize=8); ax.grid(True, alpha=0.3)
 
-        # Panel 3: Isotropic concept bar chart
-        ax = axes[2]
+        # Row 1, Panel 3: Isotropic concept bar chart (top activations)
+        ax = axes[0, 2]
         gauss_top_concepts = get_top_concept_info(cv_gauss_avg, concept_names, top_k=n_show)
         all_names_g = []
         for n, _ in orig_top_concepts:
             if n not in all_names_g: all_names_g.append(n)
         for n, _ in gauss_top_concepts:
             if n not in all_names_g: all_names_g.append(n)
-        all_names_g = all_names_g[:30]
+        all_names_g = all_names_g[:25]
         orig_dict_g = {n: v for n, v in orig_top_concepts}
         gauss_dict = {n: v for n, v in gauss_top_concepts}
         y_pos_g = np.arange(len(all_names_g))
         ax.barh(y_pos_g - 0.2, [orig_dict_g.get(n, 0) for n in all_names_g], height=0.35, color='steelblue', label='Original', alpha=0.8)
-        ax.barh(y_pos_g + 0.2, [gauss_dict.get(n, 0) for n in all_names_g], height=0.35, color='coral', label=f'Isotropic avg', alpha=0.8)
-        ax.set_yticks(y_pos_g); ax.set_yticklabels([n[:25] for n in all_names_g], fontsize=9)
+        ax.barh(y_pos_g + 0.2, [gauss_dict.get(n, 0) for n in all_names_g], height=0.35, color='coral', label='Isotropic avg', alpha=0.8)
+        ax.set_yticks(y_pos_g); ax.set_yticklabels([n[:22] for n in all_names_g], fontsize=8)
         ax.invert_yaxis(); ax.set_xlabel('Activation')
-        ax.set_title(f'Isotropic: {get_class_name(PROBE_DATASET, pred_orig)} → '
+        ax.set_title(f'Top Activations: {get_class_name(PROBE_DATASET, pred_orig)} → '
                      f'{get_class_name(PROBE_DATASET, pred_gauss)} '
                      f'({"STABLE ✓" if pred_orig == pred_gauss else "CHANGED ✗"})',
-                     fontsize=12, fontweight='bold')
+                     fontsize=11, fontweight='bold')
         ax.set_xlim(0, shared_xlim)
-        ax.legend(fontsize=9); ax.grid(True, axis='x', alpha=0.3)
+        ax.legend(fontsize=8); ax.grid(True, axis='x', alpha=0.3)
+
+        # Row 2, Panel 1: Top DROPS
+        ax = axes[1, 0]
+        if g_drops:
+            drop_names = [d[0][:22] for d in g_drops[:10]]
+            drop_orig = [d[2] for d in g_drops[:10]]
+            drop_smooth = [d[3] for d in g_drops[:10]]
+            y_d = np.arange(len(drop_names))
+            ax.barh(y_d - 0.2, drop_orig, height=0.35, color='steelblue', label='Original', alpha=0.8)
+            ax.barh(y_d + 0.2, drop_smooth, height=0.35, color='#d32f2f', label='After smoothing', alpha=0.8)
+            ax.set_yticks(y_d); ax.set_yticklabels(drop_names, fontsize=8)
+            ax.invert_yaxis()
+        ax.set_xlabel('Activation'); ax.set_xlim(0, shared_xlim)
+        ax.set_title('Isotropic: Top Drops (suppressed)', fontsize=11, fontweight='bold', color='#d32f2f')
+        ax.legend(fontsize=8); ax.grid(True, axis='x', alpha=0.3)
+
+        # Row 2, Panel 2: Top GAINS
+        ax = axes[1, 1]
+        if g_gains:
+            gain_names = [g[0][:22] for g in g_gains[:10]]
+            gain_orig = [g[2] for g in g_gains[:10]]
+            gain_smooth = [g[3] for g in g_gains[:10]]
+            y_g = np.arange(len(gain_names))
+            ax.barh(y_g - 0.2, gain_orig, height=0.35, color='steelblue', label='Original', alpha=0.8)
+            ax.barh(y_g + 0.2, gain_smooth, height=0.35, color='#2e7d32', label='After smoothing', alpha=0.8)
+            ax.set_yticks(y_g); ax.set_yticklabels(gain_names, fontsize=8)
+            ax.invert_yaxis()
+        ax.set_xlabel('Activation'); ax.set_xlim(0, shared_xlim)
+        ax.set_title('Isotropic: Top Gains (boosted)', fontsize=11, fontweight='bold', color='#2e7d32')
+        ax.legend(fontsize=8); ax.grid(True, axis='x', alpha=0.3)
+
+        # Row 2, Panel 3: Least activated
+        ax = axes[1, 2]
+        if g_least:
+            least_names = [l[0][:22] for l in g_least[:10]]
+            least_orig = [l[2] for l in g_least[:10]]
+            least_smooth = [l[1] for l in g_least[:10]]
+            y_l = np.arange(len(least_names))
+            ax.barh(y_l - 0.2, least_orig, height=0.35, color='steelblue', label='Original', alpha=0.8)
+            ax.barh(y_l + 0.2, least_smooth, height=0.35, color='#757575', label='After smoothing', alpha=0.8)
+            ax.set_yticks(y_l); ax.set_yticklabels(least_names, fontsize=8)
+            ax.invert_yaxis()
+        ax.set_xlabel('Activation'); ax.set_xlim(0, shared_xlim)
+        ax.set_title('Isotropic: Least Activated (weakest survivors)', fontsize=11, fontweight='bold', color='#757575')
+        ax.legend(fontsize=8); ax.grid(True, axis='x', alpha=0.3)
+
+        fig.suptitle(f'Isotropic Gaussian Smoothing — idx={target_idx}', fontsize=14, fontweight='bold', y=1.01)
         plt.tight_layout()
         plt.savefig(os.path.join(isotropic_dir, f"idx{target_idx}_isotropic.png"), dpi=150, bbox_inches='tight')
         plt.close(fig)
@@ -689,6 +819,9 @@ for loop_i, target_idx in enumerate(TARGET_IDCS):
             'original_concepts': [{'name': n, 'value': round(v, 4)} for n, v in orig_concepts],
             'example_noisy_samples': gauss_example_samples,
             'final_avg_concepts': [{'name': n, 'value': round(v, 4)} for n, v in gauss_final_concepts],
+            'top_drops': [{'name': d[0], 'drop': d[1], 'orig': d[2], 'smoothed': d[3]} for d in g_drops[:10]],
+            'top_gains': [{'name': g[0], 'gain': g[1], 'orig': g[2], 'smoothed': g[3]} for g in g_gains[:10]],
+            'least_activated': [{'name': l[0], 'smoothed': l[1], 'orig': l[2]} for l in g_least[:10]],
         }
         with open(os.path.join(isotropic_dir, f"idx{target_idx}_detail.json"), 'w') as f:
             json.dump(isotropic_result, f, indent=2)
