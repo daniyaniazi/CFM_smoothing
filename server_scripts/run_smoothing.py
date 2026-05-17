@@ -26,19 +26,17 @@ import json
 from pathlib import Path
 from collections import Counter
 from sklearn.decomposition import PCA
-from torch.utils.data import DataLoader
+from scipy.stats import norm, binom
 import matplotlib
 matplotlib.use('Agg')  # no display on server
 import matplotlib.pyplot as plt
 from matplotlib.patches import Ellipse
 
 from cfm.arg_parser import get_default_parser
-from cfm.utils import common_init, get_img_model, get_probe_dataset
-from cfm.cfm import CFM
+from cfm.utils import common_init, get_probe_dataset
 from cfm import config as cfm_config
 from cfm.method_utils import MethodCFM
 from cfm.data_utils import probe_classnames
-from dictionary_learning.utils import load_dictionary
 
 # ===========================================================================
 # Config
@@ -55,10 +53,6 @@ N_SMOOTH_SAMPLES = 100
 N_TARGETS = 500           # number of val images to certify
 N_VIZ = 10                # save detailed viz/JSON only for the first N images
 
-# Data generation
-BATCH_SIZE = 64
-NUM_WORKERS = 4
-
 SAVE_DIR = os.path.join(os.path.dirname(__file__), '..', 'smoothing_data')
 os.makedirs(SAVE_DIR, exist_ok=True)
 
@@ -66,6 +60,70 @@ os.makedirs(SAVE_DIR, exist_ok=True)
 # ===========================================================================
 # Helpers
 # ===========================================================================
+
+# --- Cohen et al. certification helpers ---
+CERTIFY_ALPHA = 0.001  # confidence level for Clopper-Pearson bounds
+
+def clopper_pearson_lower(n_success, n_total, alpha=CERTIFY_ALPHA):
+    """Lower bound on success probability (Clopper-Pearson)."""
+    if n_success == 0:
+        return 0.0
+    return binom.ppf(alpha / 2, n_success, 1.0) / n_total if n_success > 0 else 0.0
+
+def clopper_pearson_upper(n_success, n_total, alpha=CERTIFY_ALPHA):
+    """Upper bound on success probability (Clopper-Pearson)."""
+    if n_success == n_total:
+        return 1.0
+    return binom.ppf(1 - alpha / 2, n_success + 1, 1.0) / n_total
+
+def certified_radius(sigma, p_a_lower, p_b_upper):
+    """Cohen et al. certified L2 radius: r = σ/2 * (Φ⁻¹(p_A_lower) - Φ⁻¹(p_B_upper))"""
+    if p_a_lower <= p_b_upper or p_a_lower <= 0.5:
+        return 0.0  # abstain
+    return sigma / 2.0 * (norm.ppf(p_a_lower) - norm.ppf(p_b_upper))
+
+def certify_class_votes(vote_counts, n_total, sigma):
+    """Certify a single class prediction from vote counts.
+    Returns dict with p_A_lower, p_B_upper, abstained, certified_radius, top_class, n_votes.
+    """
+    sorted_votes = vote_counts.most_common()
+    top_class, n_a = sorted_votes[0]
+    n_b = sorted_votes[1][1] if len(sorted_votes) > 1 else 0
+
+    p_a_lower = clopper_pearson_lower(n_a, n_total)
+    p_b_upper = clopper_pearson_upper(n_b, n_total)
+    abstained = (p_a_lower <= p_b_upper)
+    radius = certified_radius(sigma, p_a_lower, p_b_upper)
+
+    return {
+        'top_class': top_class,
+        'n_votes': n_a,
+        'n_votes_runner_up': n_b,
+        'p_a_lower': round(p_a_lower, 6),
+        'p_b_upper': round(p_b_upper, 6),
+        'abstained': abstained,
+        'certified_radius': round(radius, 6),
+    }
+
+def certify_concept(n_survived, n_total, sigma):
+    """Certify a single concept's presence in top-K.
+    Treats concept-in-top-K as a binary classification: 'present' vs 'absent'.
+    Returns dict with survival_rate, p_a_lower, certified, radius.
+    """
+    n_absent = n_total - n_survived
+    p_a_lower = clopper_pearson_lower(n_survived, n_total)
+    p_b_upper = clopper_pearson_upper(n_absent, n_total)
+    is_certified = (p_a_lower > 0.5) and (not (p_a_lower <= p_b_upper))
+    radius = certified_radius(sigma, p_a_lower, p_b_upper)
+
+    return {
+        'survival_rate': round(n_survived / n_total, 4),
+        'p_a_lower': round(p_a_lower, 6),
+        'certified': is_certified,
+        'certified_radius': round(radius, 6),
+    }
+
+
 def classify_concept_vector(cv, classifier_weights):
     logits = cv @ classifier_weights.T
     return logits.argmax().item()
@@ -117,10 +175,10 @@ def get_concept_changes(cv_orig, cv_smoothed, concept_names, top_k=10):
 
 
 # ===========================================================================
-# Step 1: Load CFM model
+# Step 1: Load config + concept names + classifier (NO CFM model needed)
 # ===========================================================================
 print("=" * 70)
-print("Loading CFM model")
+print("Loading config, concept names, and classifier")
 print("=" * 70)
 
 parser = get_default_parser()
@@ -131,26 +189,7 @@ args.config_name = CONFIG_NAME
 
 print(f"Device: {args.device}")
 
-feature_extractor, preprocess = get_img_model(args)
-feature_extractor.eval()
-print("CLIP-DINOiser loaded")
-
-sae_base = Path(args.save_dir_sae_ckpts['img']) / args.config_name / 'trainer_0'
-assert sae_base.exists(), f"SAE not found at {sae_base}"
-autoencoder, ae_config = load_dictionary(str(sae_base), args.device)
-print("SAE loaded")
-
-cfm_model = CFM(
-    feature_extractor=feature_extractor,
-    autoencoder=autoencoder,
-    apply_found=False,
-    device=args.device,
-)
-cfm_model.eval()
-print("CFM model ready")
-
-# Concept names (optional)
-# Try override path first (avoids bracket issues in Kai's SAE path)
+# Concept names
 from cfm import config as cfg
 concept_name_save_path = getattr(cfg, 'concept_names_override', None)
 if not concept_name_save_path or not os.path.exists(concept_name_save_path):
@@ -169,27 +208,10 @@ else:
     concept_names = None
     print("Concept names not found, using indices")
 
-
-# ===========================================================================
-# Step 2: Load dataset + linear probe
-# ===========================================================================
-print("\n" + "=" * 70)
-print("Loading datasets and linear classifier")
-print("=" * 70)
-
+# Linear probe classifier
 args.probe_dataset = PROBE_DATASET
 args.probe_split = PROBE_SPLIT
 args.probe_dataset_root_dir = cfm_config.probe_dataset_root_dir_dict[PROBE_DATASET]
-
-# Load TRAIN dataset (for KNN index / manifold)
-probe_train_dataset = get_probe_dataset(
-    PROBE_DATASET, "train", args.probe_dataset_root_dir, preprocess_fn=preprocess)
-print(f"Train dataset: {PROBE_DATASET}, {len(probe_train_dataset)} samples")
-
-# Load VAL dataset (for testing)
-probe_val_dataset = get_probe_dataset(
-    PROBE_DATASET, PROBE_SPLIT, args.probe_dataset_root_dir, preprocess_fn=preprocess)
-print(f"Val dataset: {PROBE_DATASET} ({PROBE_SPLIT}), {len(probe_val_dataset)} samples")
 
 if not hasattr(args, "autoencoder_input_dim_dict"):
     args.autoencoder_input_dim_dict = cfm_config.autoencoder_input_dim_dict
@@ -210,98 +232,86 @@ print(f"Classifier weights: {classifier_weights.shape}")
 
 
 # ===========================================================================
-# Step 3: Generate concept vectors for TRAIN (for KNN index) and VAL (for testing)
-# ===========================================================================
-
-def generate_concept_vectors(dataset, split_name, save_dir, cfm_model, device, batch_size, num_workers):
-    cv_path = os.path.join(save_dir, f"concept_vectors_{PROBE_DATASET}_{split_name}.pt")
-    labels_path = os.path.join(save_dir, f"labels_{PROBE_DATASET}_{split_name}.pt")
-
-    if os.path.exists(cv_path) and os.path.exists(labels_path):
-        print(f"\nLoading cached {split_name} concept vectors")
-        vectors = torch.load(cv_path)
-        labels = torch.load(labels_path)
-        print(f"Loaded {vectors.shape[0]} {split_name} vectors from {cv_path}")
-    else:
-        print(f"\nGenerating {split_name} concept vectors (this takes a while)", flush=True)
-        loader = DataLoader(dataset, batch_size=batch_size,
-                            shuffle=False, num_workers=num_workers, pin_memory=True)
-        all_vecs = []
-        all_labs = []
-        import time as _time
-        t0 = _time.time()
-        with torch.no_grad():
-            for batch_idx, (imgs, labs) in enumerate(loader):
-                imgs = imgs.to(device)
-                cvs = cfm_model.get_aggregated_concept_activations(imgs)
-                all_vecs.append(cvs.cpu())
-                all_labs.append(labs)
-                if (batch_idx + 1) % 100 == 0:
-                    elapsed = _time.time() - t0
-                    eta = elapsed / (batch_idx + 1) * (len(loader) - batch_idx - 1)
-                    print(f"  {split_name} batch {batch_idx+1}/{len(loader)}  "
-                          f"elapsed {elapsed/60:.1f}min  ETA {eta/60:.1f}min", flush=True)
-        vectors = torch.cat(all_vecs, dim=0)
-        labels = torch.cat(all_labs, dim=0)
-        torch.save(vectors, cv_path)
-        torch.save(labels, labels_path)
-        print(f"Saved {vectors.shape[0]} {split_name} concept vectors to {cv_path}")
-
-    print(f"{split_name} shape: {vectors.shape}, non-zero/vec (mean): {(vectors > 0).sum(1).float().mean():.1f}")
-    return vectors, labels
-
-# Train vectors (for KNN index / manifold)
-train_concept_vectors, train_labels = generate_concept_vectors(
-    probe_train_dataset, "train", SAVE_DIR, cfm_model, args.device, BATCH_SIZE, NUM_WORKERS)
-
-# Val vectors (for testing targets)
-val_concept_vectors, val_labels = generate_concept_vectors(
-    probe_val_dataset, "val", SAVE_DIR, cfm_model, args.device, BATCH_SIZE, NUM_WORKERS)
-
-
-# ===========================================================================
-# Step 4: Subsample train + build Annoy KNN index (cached)
+# Step 2: Load cached concept vectors (built by build_knn_index.py)
 # ===========================================================================
 print("\n" + "=" * 70)
-print("Building KNN index on TRAIN concept vectors")
+print("Loading cached concept vectors")
+print("=" * 70)
+
+train_cv_path = os.path.join(SAVE_DIR, f"concept_vectors_{PROBE_DATASET}_train.pt")
+train_labels_path = os.path.join(SAVE_DIR, f"labels_{PROBE_DATASET}_train.pt")
+val_cv_path = os.path.join(SAVE_DIR, f"concept_vectors_{PROBE_DATASET}_val.pt")
+val_labels_path = os.path.join(SAVE_DIR, f"labels_{PROBE_DATASET}_val.pt")
+
+for p in [train_cv_path, train_labels_path, val_cv_path, val_labels_path]:
+    if not os.path.exists(p):
+        print(f"ERROR: Missing {p}")
+        print("Run build_knn_index.py first to generate concept vectors and KNN index.")
+        sys.exit(1)
+
+train_concept_vectors = torch.load(train_cv_path)
+train_labels = torch.load(train_labels_path)
+print(f"Train: {train_concept_vectors.shape[0]} vectors, dim={train_concept_vectors.shape[1]}")
+
+val_concept_vectors = torch.load(val_cv_path)
+val_labels = torch.load(val_labels_path)
+print(f"Val: {val_concept_vectors.shape[0]} vectors")
+
+# For image path lookup we still need the dataset object
+preprocess = None  # not needed for smoothing, but needed for dataset path lookup
+try:
+    from torchvision import transforms
+    preprocess = transforms.Compose([
+        transforms.Resize(224, interpolation=transforms.InterpolationMode.BICUBIC),
+        transforms.CenterCrop(224),
+        transforms.ToTensor(),
+    ])
+    probe_val_dataset = get_probe_dataset(
+        PROBE_DATASET, PROBE_SPLIT, args.probe_dataset_root_dir, preprocess_fn=preprocess)
+except Exception:
+    probe_val_dataset = None
+    print("Warning: could not load val dataset for image path lookup")
+
+
+# ===========================================================================
+# Step 3: Load pre-built KNN index (built by build_knn_index.py)
+# ===========================================================================
+print("\n" + "=" * 70)
+print("Loading KNN index")
 print("=" * 70)
 
 import annoy
-
-N_TRAIN_SUBSAMPLE = 200_000  # subsample to avoid OOM
-N_TRAIN_FULL = train_concept_vectors.shape[0]
-
-if N_TRAIN_FULL > N_TRAIN_SUBSAMPLE:
-    np.random.seed(123)
-    subsample_idcs = np.random.choice(N_TRAIN_FULL, size=N_TRAIN_SUBSAMPLE, replace=False)
-    train_concept_vectors = train_concept_vectors[subsample_idcs]
-    train_labels = train_labels[subsample_idcs]
-    print(f"Subsampled train: {N_TRAIN_FULL} -> {N_TRAIN_SUBSAMPLE}", flush=True)
+import glob
 
 N_TRAIN = train_concept_vectors.shape[0]
 CONCEPT_DIM = train_concept_vectors.shape[1]
 
-index_path = os.path.join(SAVE_DIR, f"knn_concepts_{PROBE_DATASET}_train_{N_TRAIN}.ann")
+index_pattern = os.path.join(SAVE_DIR, f"knn_concepts_{PROBE_DATASET}_train_*.ann")
+available_indices = sorted(glob.glob(index_pattern), key=os.path.getsize, reverse=True)
 
-if os.path.exists(index_path):
-    knn_index = annoy.AnnoyIndex(CONCEPT_DIM, 'euclidean')
-    knn_index.load(index_path)
-    print(f"Loaded existing KNN index from {index_path}", flush=True)
-else:
-    import time as _time
-    knn_index = annoy.AnnoyIndex(CONCEPT_DIM, 'euclidean')
-    print(f"Adding {N_TRAIN} items to index...", flush=True)
-    t0 = _time.time()
-    for i in range(N_TRAIN):
-        knn_index.add_item(i, train_concept_vectors[i].numpy())
-        if (i + 1) % 50000 == 0:
-            print(f"  added {i+1}/{N_TRAIN} items ({_time.time()-t0:.0f}s)", flush=True)
-    N_TREES = 10
-    print(f"Building index with {N_TREES} trees...", flush=True)
-    knn_index.build(N_TREES)
-    knn_index.save(index_path)
-    print(f"Built Annoy index: {N_TRAIN} vectors, dim={CONCEPT_DIM}, trees={N_TREES} "
-          f"in {(_time.time()-t0)/60:.1f}min", flush=True)
+index_path = None
+for candidate in available_indices:
+    try:
+        n_in_index = int(os.path.basename(candidate).split("_train_")[1].replace(".ann", ""))
+        if n_in_index >= N_TRAIN:
+            index_path = candidate
+            break
+    except (ValueError, IndexError):
+        continue
+
+# Fall back to any available index
+if index_path is None and available_indices:
+    index_path = available_indices[0]
+    print(f"WARNING: No full-size index found, using best available: {index_path}", flush=True)
+
+if index_path is None or not os.path.exists(index_path):
+    print("ERROR: No KNN index found!")
+    print("Run build_knn_index.py first to build the index.")
+    sys.exit(1)
+
+knn_index = annoy.AnnoyIndex(CONCEPT_DIM, 'euclidean')
+knn_index.load(index_path)
+print(f"Loaded KNN index from {index_path}", flush=True)
 
 
 # ===========================================================================
@@ -313,7 +323,25 @@ print("=" * 70, flush=True)
 print(f"K={K_NEIGHBORS}, sigma={SCALE_WEIGHT}, N_samples={N_SMOOTH_SAMPLES}", flush=True)
 print(f"Index: TRAIN ({N_TRAIN} vectors), Targets: VAL", flush=True)
 
-results = []
+# --- Incremental saving: write each result as a JSONL line so nothing is lost on OOM ---
+results_jsonl_path = os.path.join(SAVE_DIR, f"smoothing_results_{PROBE_DATASET}.jsonl")
+
+# Resume support: load already-completed target indices
+completed_idxs = set()
+if os.path.exists(results_jsonl_path):
+    with open(results_jsonl_path, 'r') as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                try:
+                    r = json.loads(line)
+                    completed_idxs.add(r['idx'])
+                except json.JSONDecodeError:
+                    pass
+    print(f"Resuming: {len(completed_idxs)} targets already completed", flush=True)
+
+# Open JSONL in append mode — each result is flushed immediately
+results_jsonl_file = open(results_jsonl_path, 'a')
 
 # Try to get image paths from the dataset
 def get_image_path(dataset, idx):
@@ -341,6 +369,12 @@ print(f"Certifying {N_TARGETS} val images (saving viz for first {N_VIZ})", flush
 viz_count = 0
 
 for loop_i, target_idx in enumerate(TARGET_IDCS):
+    # Skip already-completed targets (resume after OOM/restart)
+    if target_idx in completed_idxs:
+        if (loop_i + 1) % 50 == 0:
+            print(f"  [{loop_i+1}/{N_TARGETS}] skipped (already done)", flush=True)
+        continue
+
     cv_orig = val_concept_vectors[target_idx].numpy()
     label_true = val_labels[target_idx].item()
     pred_orig = classify_concept_vector(
@@ -379,29 +413,55 @@ for loop_i, target_idx in enumerate(TARGET_IDCS):
     # Whiten original
     cv_whitened = (cv_orig) @ Vt.T / np.sqrt(ev)
 
-    # Smoothing loop — collect 5 example noisy samples
+    # Smoothing loop — collect per-concept survival + downstream class votes
     smooth_preds = []
     smooth_concepts_overlap = []
     example_noisy_samples = []
-    orig_top = set(np.argsort(-cv_orig)[:20])
+    orig_top_k = 20
+    orig_top_idxs = np.argsort(-cv_orig)[:orig_top_k]  # indices of top-K active concepts
+    orig_top = set(orig_top_idxs.tolist())
+    # Per-concept survival counter: how many of N samples still have this concept in top-K
+    concept_survival_counts = {int(idx): 0 for idx in orig_top_idxs}
+    # Track ALL concepts that appear in top-K across any smooth sample (for vote histogram)
+    all_concept_votes_manifold = Counter()
+    # Track activation values of original top-K concepts across all smooth samples (for distribution plot)
+    manifold_activation_traces = {int(idx): [] for idx in orig_top_idxs}
+    # Also store ALL smoothed vectors for viz (to analyze least-activated/new concepts)
+    save_viz = (viz_count < N_VIZ)
+    all_manifold_smooth_vecs = [] if save_viz else None
 
     for sample_i in range(N_SMOOTH_SAMPLES):
         noise = np.random.normal(0, SCALE_WEIGHT, size=len(ev))
         cv_noised = cv_whitened + noise
         cv_smoothed = cv_noised @ (np.sqrt(ev)[:, None] * Vt) + mean_nn
 
+        # Record activation of each original top-K concept in this smooth sample
+        for cidx in orig_top_idxs:
+            manifold_activation_traces[int(cidx)].append(float(cv_smoothed[cidx]))
+        if all_manifold_smooth_vecs is not None:
+            all_manifold_smooth_vecs.append(cv_smoothed)
+
+        # Downstream class prediction
         pred_i = classify_concept_vector(
             torch.tensor(cv_smoothed, dtype=torch.float32, device=args.device),
             classifier_weights)
         smooth_preds.append(pred_i)
 
-        noised_top = set(np.argsort(-cv_smoothed)[:20])
-        overlap = len(orig_top & noised_top) / 20.0
+        # Concept-level: which of the original top-K survived?
+        smoothed_top_idxs = np.argsort(-cv_smoothed)[:orig_top_k]
+        smoothed_top = set(smoothed_top_idxs.tolist())
+        overlap = len(orig_top & smoothed_top) / orig_top_k
         smooth_concepts_overlap.append(overlap)
+        for cidx in orig_top_idxs:
+            if int(cidx) in smoothed_top:
+                concept_survival_counts[int(cidx)] += 1
+        # Count ALL concepts in top-K (including new ones)
+        for cidx in smoothed_top_idxs:
+            all_concept_votes_manifold[int(cidx)] += 1
 
         # Save first 5 noisy samples as examples
         if sample_i < 5:
-            sample_concepts = get_top_concept_info(cv_smoothed, concept_names, top_k=20)
+            sample_concepts = get_top_concept_info(cv_smoothed, concept_names, top_k=orig_top_k)
             example_noisy_samples.append({
                 'sample_idx': sample_i + 1,
                 'pred_class': get_class_name(PROBE_DATASET, pred_i),
@@ -409,9 +469,30 @@ for loop_i, target_idx in enumerate(TARGET_IDCS):
                 'top_concepts': [{'name': n, 'value': round(v, 4)} for n, v in sample_concepts],
             })
 
-    # Majority vote
+    # Per-concept certification (Clopper-Pearson + radius)
+    concept_survival_named = []
+    for cidx in orig_top_idxs:
+        cname = concept_names[cidx] if concept_names else str(cidx)
+        n_survived = concept_survival_counts[int(cidx)]
+        cert = certify_concept(n_survived, N_SMOOTH_SAMPLES, SCALE_WEIGHT)
+        concept_survival_named.append({
+            'concept_idx': int(cidx),
+            'name': cname,
+            'orig_activation': round(float(cv_orig[cidx]), 4),
+            'n_survived': n_survived,
+            **cert,
+        })
+    n_concepts_certified = sum(1 for c in concept_survival_named if c['certified'])
+    mean_concept_survival = round(float(np.mean([c['survival_rate'] for c in concept_survival_named])), 4)
+    concept_radii = [c['certified_radius'] for c in concept_survival_named if c['certified']]
+    min_concept_radius = round(min(concept_radii), 6) if concept_radii else 0.0
+    mean_concept_radius = round(float(np.mean(concept_radii)), 6) if concept_radii else 0.0
+
+    # Downstream class certification (Cohen et al.)
     vote_counts = Counter(smooth_preds)
-    pred_smooth, n_votes = vote_counts.most_common(1)[0]
+    class_cert = certify_class_votes(vote_counts, N_SMOOTH_SAMPLES, SCALE_WEIGHT)
+    pred_smooth = class_cert['top_class']
+    n_votes = class_cert['n_votes']
 
     # --- Compute "average smoothed" concept vector ---
     # Re-run to get the mean smoothed vector for final concept summary
@@ -428,19 +509,34 @@ for loop_i, target_idx in enumerate(TARGET_IDCS):
     gauss_preds = []
     gauss_overlap = []
     gauss_example_samples = []
+    gauss_concept_survival_counts = {int(idx): 0 for idx in orig_top_idxs}
+    all_concept_votes_gaussian = Counter()
+    gauss_activation_traces = {int(idx): [] for idx in orig_top_idxs}
+    all_gauss_smooth_vecs = [] if save_viz else None
 
     for sample_i in range(N_SMOOTH_SAMPLES):
         noise = np.random.normal(0, gauss_sigma, size=cv_orig.shape)
         cv_gauss = cv_orig + noise
+
+        for cidx in orig_top_idxs:
+            gauss_activation_traces[int(cidx)].append(float(cv_gauss[cidx]))
+        if all_gauss_smooth_vecs is not None:
+            all_gauss_smooth_vecs.append(cv_gauss)
         pred_g = classify_concept_vector(
             torch.tensor(cv_gauss, dtype=torch.float32, device=args.device),
             classifier_weights)
         gauss_preds.append(pred_g)
-        gauss_top = set(np.argsort(-cv_gauss)[:20])
-        g_overlap = len(orig_top & gauss_top) / 20.0
+        gauss_top_idxs_arr = np.argsort(-cv_gauss)[:orig_top_k]
+        gauss_top = set(gauss_top_idxs_arr.tolist())
+        g_overlap = len(orig_top & gauss_top) / orig_top_k
         gauss_overlap.append(g_overlap)
+        for cidx in orig_top_idxs:
+            if int(cidx) in gauss_top:
+                gauss_concept_survival_counts[int(cidx)] += 1
+        for cidx in gauss_top_idxs_arr:
+            all_concept_votes_gaussian[int(cidx)] += 1
         if sample_i < 5:
-            g_concepts = get_top_concept_info(cv_gauss, concept_names, top_k=20)
+            g_concepts = get_top_concept_info(cv_gauss, concept_names, top_k=orig_top_k)
             gauss_example_samples.append({
                 'sample_idx': sample_i + 1,
                 'pred_class': get_class_name(PROBE_DATASET, pred_g),
@@ -448,8 +544,28 @@ for loop_i, target_idx in enumerate(TARGET_IDCS):
                 'top_concepts': [{'name': n, 'value': round(v, 4)} for n, v in g_concepts],
             })
 
+    gauss_concept_survival_named = []
+    for cidx in orig_top_idxs:
+        cname = concept_names[cidx] if concept_names else str(cidx)
+        n_survived = gauss_concept_survival_counts[int(cidx)]
+        cert = certify_concept(n_survived, N_SMOOTH_SAMPLES, gauss_sigma)
+        gauss_concept_survival_named.append({
+            'concept_idx': int(cidx),
+            'name': cname,
+            'orig_activation': round(float(cv_orig[cidx]), 4),
+            'n_survived': n_survived,
+            **cert,
+        })
+    g_n_concepts_certified = sum(1 for c in gauss_concept_survival_named if c['certified'])
+    g_mean_concept_survival = round(float(np.mean([c['survival_rate'] for c in gauss_concept_survival_named])), 4)
+    g_concept_radii = [c['certified_radius'] for c in gauss_concept_survival_named if c['certified']]
+    g_min_concept_radius = round(min(g_concept_radii), 6) if g_concept_radii else 0.0
+    g_mean_concept_radius = round(float(np.mean(g_concept_radii)), 6) if g_concept_radii else 0.0
+
     gauss_vote_counts = Counter(gauss_preds)
-    pred_gauss, n_votes_gauss = gauss_vote_counts.most_common(1)[0]
+    gauss_class_cert = certify_class_votes(gauss_vote_counts, N_SMOOTH_SAMPLES, gauss_sigma)
+    pred_gauss = gauss_class_cert['top_class']
+    n_votes_gauss = gauss_class_cert['n_votes']
 
     cv_gauss_accum = np.zeros_like(cv_orig)
     for _ in range(N_SMOOTH_SAMPLES):
@@ -460,14 +576,18 @@ for loop_i, target_idx in enumerate(TARGET_IDCS):
 
     # --- Print ---
     orig_concepts = get_top_concept_info(cv_orig, concept_names, top_k=20)
-    save_viz = (viz_count < N_VIZ)
 
     print(f"\n[{loop_i+1}/{N_TARGETS}] idx={target_idx}  "
           f"true={get_class_name(PROBE_DATASET, label_true)}  "
           f"orig={get_class_name(PROBE_DATASET, pred_orig)}  "
           f"manifold={get_class_name(PROBE_DATASET, pred_smooth)}({n_votes}/{N_SMOOTH_SAMPLES})  "
           f"gauss={get_class_name(PROBE_DATASET, pred_gauss)}({n_votes_gauss}/{N_SMOOTH_SAMPLES})  "
-          f"m_stable={pred_orig == pred_smooth}  g_stable={pred_orig == pred_gauss}", flush=True)
+          f"\n    class: m_r={class_cert['certified_radius']:.4f}{'(ABSTAIN)' if class_cert['abstained'] else ''}  "
+          f"g_r={gauss_class_cert['certified_radius']:.4f}{'(ABSTAIN)' if gauss_class_cert['abstained'] else ''}"
+          f"\n    concepts: m_surv={mean_concept_survival:.2f} ({n_concepts_certified}/{orig_top_k} cert, "
+          f"min_r={min_concept_radius:.4f})  "
+          f"g_surv={g_mean_concept_survival:.2f} ({g_n_concepts_certified}/{orig_top_k} cert, "
+          f"min_r={g_min_concept_radius:.4f})", flush=True)
 
     if save_viz:
         print(f"\n  ORIGINAL top-20 concepts:")
@@ -669,6 +789,9 @@ for loop_i, target_idx in enumerate(TARGET_IDCS):
             'n_votes': n_votes,
             'stable': pred_orig == pred_smooth,
             'mean_overlap': round(float(np.mean(smooth_concepts_overlap)), 4),
+            'mean_concept_survival': mean_concept_survival,
+            'n_concepts_certified': n_concepts_certified,
+            'concept_survival': concept_survival_named,
             'params': {'K_NEIGHBORS': K_NEIGHBORS, 'SCALE_WEIGHT': SCALE_WEIGHT, 'N_SMOOTH_SAMPLES': N_SMOOTH_SAMPLES},
             'original_concepts': [{'name': n, 'value': round(v, 4)} for n, v in orig_concepts],
             'top5_neighbors': top5_neighbors_info,
@@ -815,6 +938,9 @@ for loop_i, target_idx in enumerate(TARGET_IDCS):
             'n_votes': n_votes_gauss,
             'stable': pred_orig == pred_gauss,
             'mean_overlap': round(float(np.mean(gauss_overlap)), 4),
+            'mean_concept_survival': g_mean_concept_survival,
+            'n_concepts_certified': g_n_concepts_certified,
+            'concept_survival': gauss_concept_survival_named,
             'params': {'GAUSS_SIGMA': round(float(gauss_sigma), 4), 'N_SMOOTH_SAMPLES': N_SMOOTH_SAMPLES},
             'original_concepts': [{'name': n, 'value': round(v, 4)} for n, v in orig_concepts],
             'example_noisy_samples': gauss_example_samples,
@@ -833,58 +959,370 @@ for loop_i, target_idx in enumerate(TARGET_IDCS):
             shutil.copy2(img_path, os.path.join(manifold_dir, f"idx{target_idx}_input{ext}"))
             shutil.copy2(img_path, os.path.join(isotropic_dir, f"idx{target_idx}_input{ext}"))
 
+        # ---------------------------------------------------------------
+        # Concept Vote Histogram — Manifold
+        # Shows how often each concept appears in top-K across N samples
+        # Original top-20 concepts highlighted in blue, new concepts in orange
+        # ---------------------------------------------------------------
+        def _plot_concept_vote_histogram(concept_votes, orig_top_set, concept_names_list,
+                                         n_samples, method_name, color_orig, color_new,
+                                         save_path, target_idx, n_show=50):
+            """Bar chart: x=concepts (union of top across N samples), y=votes (how many samples)."""
+            # Get top concepts by vote count, limit to n_show
+            top_concepts = concept_votes.most_common(n_show)
+            if not top_concepts:
+                return
+
+            c_idxs = [c[0] for c in top_concepts]
+            c_votes = [c[1] for c in top_concepts]
+            c_names = [(concept_names_list[i] if concept_names_list else f"c_{i}")[:25]
+                       for i in c_idxs]
+            c_colors = [color_orig if i in orig_top_set else color_new for i in c_idxs]
+
+            fig, ax = plt.subplots(figsize=(max(14, len(c_names) * 0.35), 6))
+            bars = ax.bar(range(len(c_names)), c_votes, color=c_colors, alpha=0.85, edgecolor='white', linewidth=0.5)
+            ax.set_xticks(range(len(c_names)))
+            ax.set_xticklabels(c_names, rotation=60, ha='right', fontsize=7)
+            ax.set_ylabel(f'Votes (out of {n_samples})')
+            ax.set_xlabel('Concept')
+            ax.axhline(y=n_samples * 0.5, color='red', ls='--', alpha=0.5, label='50% threshold')
+
+            # Legend
+            from matplotlib.patches import Patch
+            legend_elements = [
+                Patch(facecolor=color_orig, label=f'Original top-{orig_top_k} (survived)'),
+                Patch(facecolor=color_new, label='New concepts (appeared after smoothing)'),
+            ]
+            ax.legend(handles=legend_elements, fontsize=9, loc='upper right')
+
+            ax.set_title(f'{method_name} — Concept Votes across {n_samples} smooth samples\n'
+                         f'idx={target_idx}, true={get_class_name(PROBE_DATASET, label_true)}',
+                         fontsize=12, fontweight='bold')
+            ax.set_ylim(0, n_samples * 1.08)
+            ax.grid(True, axis='y', alpha=0.3)
+            plt.tight_layout()
+            plt.savefig(save_path, dpi=150, bbox_inches='tight')
+            plt.close(fig)
+
+        _plot_concept_vote_histogram(
+            all_concept_votes_manifold, orig_top, concept_names,
+            N_SMOOTH_SAMPLES, 'Manifold Smoothing', '#2196F3', '#FF9800',
+            os.path.join(manifold_dir, f"idx{target_idx}_concept_votes.png"),
+            target_idx)
+
+        _plot_concept_vote_histogram(
+            all_concept_votes_gaussian, orig_top, concept_names,
+            N_SMOOTH_SAMPLES, 'Isotropic Gaussian', '#2196F3', '#FF9800',
+            os.path.join(isotropic_dir, f"idx{target_idx}_concept_votes.png"),
+            target_idx)
+
+        # ---------------------------------------------------------------
+        # Least Activated Concepts — standalone bar chart (like top activations)
+        # Shows originally-active concepts with lowest activation values,
+        # with concept index shown, comparing original vs smoothed.
+        # ---------------------------------------------------------------
+        def _plot_least_activated(cv_orig, cv_smoothed_avg, concept_names_list,
+                                  method_name, color_smooth, save_path, target_idx,
+                                  n_show=20):
+            """Bar chart of least-activated originally-active concepts, with concept index."""
+            # Find all originally active concepts (activation > 1e-6)
+            active_mask = cv_orig > 1e-6
+            if active_mask.sum() == 0:
+                return
+            active_idxs = np.where(active_mask)[0]
+            # Sort by original activation (ascending = least first)
+            sorted_by_act = sorted(active_idxs, key=lambda i: cv_orig[i])[:n_show]
+
+            c_labels = []
+            for i in sorted_by_act:
+                cname = (concept_names_list[i] if concept_names_list else f"c_{i}")[:22]
+                c_labels.append(f"[{i}] {cname}")
+
+            orig_vals = [float(cv_orig[i]) for i in sorted_by_act]
+            smooth_vals = [float(cv_smoothed_avg[i]) for i in sorted_by_act]
+
+            fig, ax = plt.subplots(figsize=(12, max(6, len(c_labels) * 0.4)))
+            y_pos = np.arange(len(c_labels))
+            ax.barh(y_pos - 0.2, orig_vals, height=0.35, color='steelblue',
+                    label='Original', alpha=0.8)
+            ax.barh(y_pos + 0.2, smooth_vals, height=0.35, color=color_smooth,
+                    label=f'{method_name} avg', alpha=0.8)
+            ax.set_yticks(y_pos)
+            ax.set_yticklabels(c_labels, fontsize=8)
+            ax.invert_yaxis()
+            ax.set_xlabel('Activation')
+            ax.set_title(f'{method_name}: Least Activated Concepts (sorted by original activation)\n'
+                         f'idx={target_idx}, true={get_class_name(PROBE_DATASET, label_true)}',
+                         fontsize=12, fontweight='bold')
+            ax.legend(fontsize=9)
+            ax.grid(True, axis='x', alpha=0.3)
+            plt.tight_layout()
+            plt.savefig(save_path, dpi=150, bbox_inches='tight')
+            plt.close(fig)
+
+        _plot_least_activated(
+            cv_orig, cv_smoothed_avg, concept_names,
+            'Manifold', 'coral',
+            os.path.join(manifold_dir, f"idx{target_idx}_least_activated.png"),
+            target_idx)
+
+        _plot_least_activated(
+            cv_orig, cv_gauss_avg, concept_names,
+            'Gaussian', '#FF9800',
+            os.path.join(isotropic_dir, f"idx{target_idx}_least_activated.png"),
+            target_idx)
+
+        # ---------------------------------------------------------------
+        # Concept Activation Distribution — boxplots showing spread across N samples
+        # One figure per method: for each original top-K concept, show the
+        # distribution of its activation value across all N smooth samples,
+        # with the original activation marked as a red diamond.
+        # ---------------------------------------------------------------
+        def _plot_activation_distribution(all_smooth_vecs, orig_top_idxs_arr, cv_orig,
+                                          concept_votes, concept_names_list, orig_top_set,
+                                          method_name, color_top, color_least, color_new,
+                                          save_path, target_idx, n_samples, n_new=10):
+            """3-row box plot: top-20 (original), least-activated (original near-zero), new concepts.
+            
+            Row 1: Original top-K concepts sorted by original activation
+            Row 2: Least activated — originally active concepts with lowest activation values
+            Row 3: New concepts — NOT in original top-K but appeared frequently after smoothing
+            """
+            smooth_mat = np.stack(all_smooth_vecs)  # (N, 8192)
+
+            # --- Row 1: Original top-K sorted by original activation ---
+            sorted_top = sorted(orig_top_idxs_arr, key=lambda i: cv_orig[i], reverse=True)
+
+            # --- Row 2: Least activated (originally had low but non-zero activation) ---
+            # Find originally-active concepts (activation > 1e-6) NOT in top-K, sorted by
+            # original activation ascending. These are on the boundary.
+            all_active = np.where(cv_orig > 1e-6)[0]
+            least_candidates = [i for i in all_active if i not in orig_top_set]
+            least_candidates = sorted(least_candidates, key=lambda i: cv_orig[i])[:n_new]
+            # If not enough non-top-K active concepts, include the weakest from top-K
+            if len(least_candidates) < n_new:
+                weak_top = sorted(orig_top_idxs_arr, key=lambda i: cv_orig[i])[:n_new - len(least_candidates)]
+                least_candidates = least_candidates + [i for i in weak_top if i not in least_candidates]
+
+            # --- Row 3: New concepts (NOT in original top-K, appeared in smooth samples) ---
+            new_concepts = [(cidx, cnt) for cidx, cnt in concept_votes.most_common()
+                          if cidx not in orig_top_set]
+            new_concept_idxs = [c[0] for c in new_concepts[:n_new]]
+
+            # Helper to make one row of box plots
+            def _draw_row(ax, concept_idxs, row_color, row_label):
+                if not concept_idxs:
+                    ax.text(0.5, 0.5, 'None', ha='center', va='center', transform=ax.transAxes)
+                    ax.set_title(row_label, fontsize=11, fontweight='bold')
+                    return
+                c_names = [(concept_names_list[i] if concept_names_list else f"c_{i}")[:25]
+                           for i in concept_idxs]
+                data = [smooth_mat[:, i].tolist() for i in concept_idxs]
+                orig_vals = [float(cv_orig[i]) for i in concept_idxs]
+
+                bp = ax.boxplot(data, positions=range(len(c_names)), widths=0.6,
+                               patch_artist=True, showfliers=False,
+                               medianprops=dict(color='black', linewidth=1.5))
+                for patch in bp['boxes']:
+                    patch.set_facecolor(row_color)
+                    patch.set_alpha(0.6)
+                ax.scatter(range(len(c_names)), orig_vals, c='red', s=80, marker='D',
+                          zorder=5, edgecolors='darkred', linewidths=1, label='Original')
+                for j, d in enumerate(data):
+                    jitter = np.random.normal(0, 0.08, size=len(d))
+                    ax.scatter(np.full(len(d), j) + jitter, d, c=row_color, s=3, alpha=0.15, zorder=2)
+                ax.set_xticks(range(len(c_names)))
+                ax.set_xticklabels(c_names, rotation=45, ha='right', fontsize=8)
+                ax.set_ylabel('Activation')
+                ax.set_title(row_label, fontsize=11, fontweight='bold')
+                ax.legend(fontsize=8, loc='upper right')
+                ax.grid(True, axis='y', alpha=0.3)
+                ax.axhline(y=0, color='gray', ls='-', alpha=0.3)
+
+            fig, axes = plt.subplots(3, 1, figsize=(max(14, max(len(sorted_top), n_new) * 0.6), 18))
+
+            _draw_row(axes[0], sorted_top, color_top,
+                      f'Top-{orig_top_k} Original Concepts (sorted by activation)')
+            _draw_row(axes[1], least_candidates, color_least,
+                      f'Least Activated (weak/boundary concepts)')
+            _draw_row(axes[2], new_concept_idxs, color_new,
+                      f'Top-{n_new} NEW Concepts (not in original top-{orig_top_k}, emerged after smoothing)')
+
+            fig.suptitle(f'{method_name} — Activation Distributions (N={n_samples})\n'
+                         f'idx={target_idx}, true={get_class_name(PROBE_DATASET, label_true)}',
+                         fontsize=13, fontweight='bold', y=1.01)
+            plt.tight_layout()
+            plt.savefig(save_path, dpi=150, bbox_inches='tight')
+            plt.close(fig)
+
+        _plot_activation_distribution(
+            all_manifold_smooth_vecs, orig_top_idxs, cv_orig,
+            all_concept_votes_manifold, concept_names, orig_top,
+            'Manifold Smoothing', '#2196F3', '#757575', '#FF9800',
+            os.path.join(manifold_dir, f"idx{target_idx}_activation_dist.png"),
+            target_idx, N_SMOOTH_SAMPLES)
+
+        _plot_activation_distribution(
+            all_gauss_smooth_vecs, orig_top_idxs, cv_orig,
+            all_concept_votes_gaussian, concept_names, orig_top,
+            'Isotropic Gaussian', '#2196F3', '#757575', '#FF9800',
+            os.path.join(isotropic_dir, f"idx{target_idx}_activation_dist.png"),
+            target_idx, N_SMOOTH_SAMPLES)
+
         print(f"\n  Saved viz+detail for idx {target_idx} to: {manifold_dir} & {isotropic_dir}")
         viz_count += 1
     else:
         if (loop_i + 1) % 50 == 0:
             print(f"  [{loop_i+1}/{N_TARGETS}] done")
 
-    results.append({
+    # --- Write result immediately to JSONL (survives OOM) ---
+    result_row = {
         'idx': target_idx,
         'label_true': label_true,
         'pred_orig': pred_orig,
-        'pred_manifold': pred_smooth,
-        'n_votes_manifold': n_votes,
-        'stable_manifold': pred_orig == pred_smooth,
+        # === Concept-level certification (manifold) ===
+        'mean_concept_survival_manifold': mean_concept_survival,
+        'n_concepts_certified_manifold': n_concepts_certified,
+        'min_concept_radius_manifold': min_concept_radius,
+        'mean_concept_radius_manifold': mean_concept_radius,
+        'concept_survival_manifold': concept_survival_named,
         'overlap_manifold': round(float(np.mean(smooth_concepts_overlap)), 4),
-        'pred_gaussian': pred_gauss,
-        'n_votes_gaussian': n_votes_gauss,
-        'stable_gaussian': pred_orig == pred_gauss,
+        # === Downstream class certification (manifold) ===
+        'pred_manifold': pred_smooth,
+        'class_cert_manifold': class_cert,
+        'stable_manifold': pred_orig == pred_smooth and not class_cert['abstained'],
+        # === Concept-level certification (gaussian) ===
+        'mean_concept_survival_gaussian': g_mean_concept_survival,
+        'n_concepts_certified_gaussian': g_n_concepts_certified,
+        'min_concept_radius_gaussian': g_min_concept_radius,
+        'mean_concept_radius_gaussian': g_mean_concept_radius,
+        'concept_survival_gaussian': gauss_concept_survival_named,
         'overlap_gaussian': round(float(np.mean(gauss_overlap)), 4),
-    })
+        # === Downstream class certification (gaussian) ===
+        'pred_gaussian': pred_gauss,
+        'class_cert_gaussian': gauss_class_cert,
+        'stable_gaussian': pred_orig == pred_gauss and not gauss_class_cert['abstained'],
+    }
+    results_jsonl_file.write(json.dumps(result_row) + '\n')
+    results_jsonl_file.flush()
+
+results_jsonl_file.close()
 
 # ===========================================================================
-# Summary
+# Summary — read back from JSONL (works even after resume)
 # ===========================================================================
 print("\n" + "=" * 70)
 print("SUMMARY")
 print("=" * 70)
-n_stable_manifold = sum(r['stable_manifold'] for r in results)
-n_stable_gaussian = sum(r['stable_gaussian'] for r in results)
-print(f"{'Method':<20s} {'Stable':<12s} {'Mean Overlap':<15s}")
-print(f"{'-'*47}")
-print(f"{'Manifold':<20s} {str(n_stable_manifold)+'/'+str(len(results)):<12s} "
-      f"{np.mean([r['overlap_manifold'] for r in results]):.3f}")
-print(f"{'Gaussian (baseline)':<20s} {str(n_stable_gaussian)+'/'+str(len(results)):<12s} "
-      f"{np.mean([r['overlap_gaussian'] for r in results]):.3f}")
 
+results = []
+with open(results_jsonl_path, 'r') as f:
+    for line in f:
+        line = line.strip()
+        if line:
+            try:
+                results.append(json.loads(line))
+            except json.JSONDecodeError:
+                pass
+
+print(f"Total results: {len(results)}")
+
+# --- Concept-level certification ---
+print(f"\n{'='*80}")
+print(f"CONCEPT CERTIFICATION (top-{orig_top_k} concepts, α={CERTIFY_ALPHA})")
+print(f"{'='*80}")
+m_surv = [r.get('mean_concept_survival_manifold', 0) for r in results]
+g_surv = [r.get('mean_concept_survival_gaussian', 0) for r in results]
+m_cert = [r.get('n_concepts_certified_manifold', 0) for r in results]
+g_cert = [r.get('n_concepts_certified_gaussian', 0) for r in results]
+m_min_r = [r.get('min_concept_radius_manifold', 0) for r in results]
+g_min_r = [r.get('min_concept_radius_gaussian', 0) for r in results]
+m_mean_r = [r.get('mean_concept_radius_manifold', 0) for r in results]
+g_mean_r = [r.get('mean_concept_radius_gaussian', 0) for r in results]
+m_overlap = [r.get('overlap_manifold', 0) for r in results]
+g_overlap = [r.get('overlap_gaussian', 0) for r in results]
+
+header = f"{'Method':<12s} {'Survival':<10s} {'#Cert/'+str(orig_top_k):<10s} {'Overlap':<10s} {'MinRadius':<12s} {'MeanRadius':<12s}"
+print(header)
+print(f"{'-'*66}")
+print(f"{'Manifold':<12s} {np.mean(m_surv):<10.3f} {np.mean(m_cert):<10.1f} {np.mean(m_overlap):<10.3f} "
+      f"{np.mean(m_min_r):<12.4f} {np.mean(m_mean_r):<12.4f}")
+print(f"{'Gaussian':<12s} {np.mean(g_surv):<10.3f} {np.mean(g_cert):<10.1f} {np.mean(g_overlap):<10.3f} "
+      f"{np.mean(g_min_r):<12.4f} {np.mean(g_mean_r):<12.4f}")
+
+# --- Downstream class certification ---
+print(f"\n{'='*80}")
+print(f"DOWNSTREAM CLASS CERTIFICATION (Cohen et al., α={CERTIFY_ALPHA})")
+print(f"{'='*80}")
+
+def _class_stats(results, method):
+    """Extract class certification stats."""
+    cert_key = f'class_cert_{method}'
+    stable_key = f'stable_{method}'
+    pred_key = f'pred_{method}'
+
+    n_correct_certified = 0
+    n_abstained = 0
+    radii = []
+    for r in results:
+        cc = r.get(cert_key, {})
+        if cc.get('abstained', True):
+            n_abstained += 1
+        else:
+            if r[pred_key] == r['pred_orig']:  # prediction matches original
+                n_correct_certified += 1
+            radii.append(cc.get('certified_radius', 0))
+    n = len(results)
+    return {
+        'certified_accuracy': n_correct_certified / n if n else 0,
+        'abstain_rate': n_abstained / n if n else 0,
+        'n_certified': n - n_abstained,
+        'n_correct_certified': n_correct_certified,
+        'mean_radius': np.mean(radii) if radii else 0,
+        'median_radius': np.median(radii) if radii else 0,
+        'max_radius': max(radii) if radii else 0,
+    }
+
+m_cls = _class_stats(results, 'manifold')
+g_cls = _class_stats(results, 'gaussian')
+n = len(results)
+
+header2 = f"{'Method':<12s} {'CertAcc':<10s} {'Abstain':<10s} {'#Cert':<8s} {'MeanR':<10s} {'MedianR':<10s} {'MaxR':<10s}"
+print(header2)
+print(f"{'-'*70}")
+print(f"{'Manifold':<12s} {m_cls['certified_accuracy']:<10.3f} {m_cls['abstain_rate']:<10.3f} "
+      f"{str(m_cls['n_certified'])+'/'+str(n):<8s} "
+      f"{m_cls['mean_radius']:<10.4f} {m_cls['median_radius']:<10.4f} {m_cls['max_radius']:<10.4f}")
+print(f"{'Gaussian':<12s} {g_cls['certified_accuracy']:<10.3f} {g_cls['abstain_rate']:<10.3f} "
+      f"{str(g_cls['n_certified'])+'/'+str(n):<8s} "
+      f"{g_cls['mean_radius']:<10.4f} {g_cls['median_radius']:<10.4f} {g_cls['max_radius']:<10.4f}")
+
+# Write final JSON summaries
 results_path = os.path.join(SAVE_DIR, f"smoothing_results_{PROBE_DATASET}.json")
 with open(results_path, 'w') as f:
     json.dump(results, f, indent=2)
 
-# Also save per-method summary
 manifold_summary = [{'idx': r['idx'], 'label_true': r['label_true'], 'pred_orig': r['pred_orig'],
-                     'pred_smooth': r['pred_manifold'], 'n_votes': r['n_votes_manifold'],
-                     'stable': r['stable_manifold'], 'mean_overlap': r['overlap_manifold']} for r in results]
+                     'pred_smooth': r['pred_manifold'], 'class_cert': r.get('class_cert_manifold', {}),
+                     'stable_class': r['stable_manifold'], 'mean_overlap': r['overlap_manifold'],
+                     'mean_concept_survival': r.get('mean_concept_survival_manifold', None),
+                     'n_concepts_certified': r.get('n_concepts_certified_manifold', None),
+                     'min_concept_radius': r.get('min_concept_radius_manifold', None),
+                     'mean_concept_radius': r.get('mean_concept_radius_manifold', None)} for r in results]
 isotropic_summary = [{'idx': r['idx'], 'label_true': r['label_true'], 'pred_orig': r['pred_orig'],
-                      'pred_smooth': r['pred_gaussian'], 'n_votes': r['n_votes_gaussian'],
-                      'stable': r['stable_gaussian'], 'mean_overlap': r['overlap_gaussian']} for r in results]
+                      'pred_smooth': r['pred_gaussian'], 'class_cert': r.get('class_cert_gaussian', {}),
+                      'stable_class': r['stable_gaussian'], 'mean_overlap': r['overlap_gaussian'],
+                      'mean_concept_survival': r.get('mean_concept_survival_gaussian', None),
+                      'n_concepts_certified': r.get('n_concepts_certified_gaussian', None),
+                      'min_concept_radius': r.get('min_concept_radius_gaussian', None),
+                      'mean_concept_radius': r.get('mean_concept_radius_gaussian', None)} for r in results]
 with open(os.path.join(manifold_dir, "summary.json"), 'w') as f:
     json.dump(manifold_summary, f, indent=2)
 with open(os.path.join(isotropic_dir, "summary.json"), 'w') as f:
     json.dump(isotropic_summary, f, indent=2)
 
 print(f"\nResults saved to:")
-print(f"  Combined:  {results_path}")
-print(f"  Manifold:  {manifold_dir}/summary.json")
-print(f"  Isotropic: {isotropic_dir}/summary.json")
+print(f"  JSONL (incremental): {results_jsonl_path}")
+print(f"  Combined JSON:       {results_path}")
+print(f"  Manifold summary:    {manifold_dir}/summary.json")
+print(f"  Isotropic summary:   {isotropic_dir}/summary.json")
