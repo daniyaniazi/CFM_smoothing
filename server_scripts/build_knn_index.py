@@ -12,8 +12,16 @@ Usage:
 
 import sys
 import os
+import argparse
+import shutil
 sys.stdout.reconfigure(line_buffering=True)
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+# --force flag: rebuild everything even if cached
+_parser = argparse.ArgumentParser()
+_parser.add_argument('--force', action='store_true', help='Delete existing artifacts and rebuild from scratch')
+_cli_args = _parser.parse_args()
+FORCE_REBUILD = _cli_args.force
 
 import torch
 import numpy as np
@@ -92,7 +100,14 @@ def generate_concept_vectors_chunked(split_name):
     chunk_dir = os.path.join(SAVE_DIR, f"chunks_{PROBE_DATASET}_{split_name}")
 
     # Already fully done?
-    if os.path.exists(cv_path) and os.path.exists(labels_path):
+    if FORCE_REBUILD:
+        for p in [cv_path, labels_path]:
+            if os.path.exists(p):
+                os.remove(p)
+        if os.path.exists(chunk_dir):
+            shutil.rmtree(chunk_dir)
+        print(f"\n{split_name}: --force: cleared cached artifacts")
+    elif os.path.exists(cv_path) and os.path.exists(labels_path):
         print(f"\n{split_name}: Loading cached vectors from {cv_path}")
         vecs = torch.load(cv_path)
         labs = torch.load(labels_path)
@@ -213,10 +228,13 @@ CONCEPT_DIM = train_concept_vectors.shape[1]
 
 index_path = os.path.join(SAVE_DIR, f"knn_concepts_{PROBE_DATASET}_train_{N_TRAIN}.ann")
 
-if os.path.exists(index_path):
+if os.path.exists(index_path) and not FORCE_REBUILD:
     print(f"Index already exists at {index_path}")
-    print("Delete it manually if you want to rebuild.")
+    print("Use --force to rebuild.")
 else:
+    if os.path.exists(index_path):
+        os.remove(index_path)
+        print(f"--force: deleted existing index {index_path}")
     knn_index = annoy.AnnoyIndex(CONCEPT_DIM, 'euclidean')
 
     # Use on_disk_build to write directly to file — halves peak RAM

@@ -26,7 +26,7 @@ import json
 from pathlib import Path
 from collections import Counter
 from sklearn.decomposition import PCA
-from scipy.stats import norm, binom
+from scipy.stats import norm, binom, pearsonr, kendalltau
 import matplotlib
 matplotlib.use('Agg')  # no display on server
 import matplotlib.pyplot as plt
@@ -121,6 +121,62 @@ def certify_concept(n_survived, n_total, sigma):
         'p_a_lower': round(p_a_lower, 6),
         'certified': is_certified,
         'certified_radius': round(radius, 6),
+    }
+
+
+def compute_concept_scores(cv_orig, cv_smoothed_avg, top_k=12):
+    """Paper-ready concept stability metrics.
+
+    Returns dict with:
+      concept_fidelity   – Pearson r between original and smoothed vectors
+      rank_correlation   – Kendall τ over the top-k original concept activations
+      concept_drift      – relative L2:  ||Δ|| / ||orig||
+      spurious_act_rate  – fraction of smoothed top-k that were NOT in original top-k
+      act_drop_score     – mean activation drop for original top-k concepts
+      act_gain_score     – mean activation gain for originally-zero concepts that became active
+    """
+    o = np.asarray(cv_orig, dtype=np.float64)
+    s = np.asarray(cv_smoothed_avg, dtype=np.float64)
+
+    # --- Concept Fidelity (Pearson r) ---
+    if np.std(o) < 1e-12 or np.std(s) < 1e-12:
+        fidelity = 0.0
+    else:
+        fidelity, _ = pearsonr(o, s)
+
+    # --- Rank Correlation (Kendall τ over original top-k) ---
+    orig_topk = np.argsort(-o)[:top_k]
+    if len(orig_topk) > 1:
+        tau, _ = kendalltau(o[orig_topk], s[orig_topk])
+        tau = 0.0 if np.isnan(tau) else tau
+    else:
+        tau = 0.0
+
+    # --- Concept Drift (relative L2) ---
+    norm_o = np.linalg.norm(o)
+    drift = float(np.linalg.norm(o - s) / norm_o) if norm_o > 1e-12 else 0.0
+
+    # --- Spurious Activation Rate ---
+    smooth_topk = set(np.argsort(-s)[:top_k].tolist())
+    orig_topk_set = set(orig_topk.tolist())
+    sar = len(smooth_topk - orig_topk_set) / top_k
+
+    # --- Activation Drop Score (mean drop for original top-k) ---
+    drops = np.clip(o[orig_topk] - s[orig_topk], 0, None)
+    ads = float(drops.mean())
+
+    # --- Activation Gain Score (mean gain for originally-zero → active) ---
+    zero_mask = o < 1e-8
+    gained = s[zero_mask]
+    ags = float(gained[gained > 1e-8].mean()) if (gained > 1e-8).any() else 0.0
+
+    return {
+        'concept_fidelity': round(fidelity, 6),
+        'rank_correlation': round(tau, 6),
+        'concept_drift': round(drift, 6),
+        'spurious_act_rate': round(sar, 4),
+        'act_drop_score': round(ads, 6),
+        'act_gain_score': round(ags, 6),
     }
 
 
@@ -1176,6 +1232,10 @@ for loop_i, target_idx in enumerate(TARGET_IDCS):
             print(f"  [{loop_i+1}/{N_TARGETS}] done")
 
     # --- Write result immediately to JSONL (survives OOM) ---
+    # Paper-ready concept stability scores
+    scores_manifold = compute_concept_scores(cv_orig, cv_smoothed_avg)
+    scores_gaussian = compute_concept_scores(cv_orig, cv_gauss_avg)
+
     result_row = {
         'idx': target_idx,
         'label_true': label_true,
@@ -1191,6 +1251,8 @@ for loop_i, target_idx in enumerate(TARGET_IDCS):
         'pred_manifold': pred_smooth,
         'class_cert_manifold': class_cert,
         'stable_manifold': pred_orig == pred_smooth and not class_cert['abstained'],
+        # === Concept stability scores (manifold) ===
+        'scores_manifold': scores_manifold,
         # === Concept-level certification (gaussian) ===
         'mean_concept_survival_gaussian': g_mean_concept_survival,
         'n_concepts_certified_gaussian': g_n_concepts_certified,
@@ -1202,6 +1264,8 @@ for loop_i, target_idx in enumerate(TARGET_IDCS):
         'pred_gaussian': pred_gauss,
         'class_cert_gaussian': gauss_class_cert,
         'stable_gaussian': pred_orig == pred_gauss and not gauss_class_cert['abstained'],
+        # === Concept stability scores (gaussian) ===
+        'scores_gaussian': scores_gaussian,
     }
     results_jsonl_file.write(json.dumps(result_row) + '\n')
     results_jsonl_file.flush()
@@ -1297,6 +1361,23 @@ print(f"{'Gaussian':<12s} {g_cls['certified_accuracy']:<10.3f} {g_cls['abstain_r
       f"{str(g_cls['n_certified'])+'/'+str(n):<8s} "
       f"{g_cls['mean_radius']:<10.4f} {g_cls['median_radius']:<10.4f} {g_cls['max_radius']:<10.4f}")
 
+# --- Concept Stability Scores (paper-ready) ---
+print(f"\n{'='*80}")
+print("CONCEPT STABILITY SCORES (paper-ready)")
+print(f"{'='*80}")
+score_keys = ['concept_fidelity', 'rank_correlation', 'concept_drift',
+              'spurious_act_rate', 'act_drop_score', 'act_gain_score']
+score_labels = ['Fidelity(r)', 'RankCorr(τ)', 'Drift(L2)', 'SAR', 'ADS', 'AGS']
+header3 = f"{'Method':<12s} " + " ".join(f"{l:<12s}" for l in score_labels)
+print(header3)
+print(f"{'-'*86}")
+for method, label in [('manifold', 'Manifold'), ('gaussian', 'Gaussian')]:
+    vals = []
+    for k in score_keys:
+        v = [r.get(f'scores_{method}', {}).get(k, 0) for r in results]
+        vals.append(np.mean(v))
+    print(f"{label:<12s} " + " ".join(f"{v:<12.4f}" for v in vals))
+
 # Write final JSON summaries
 results_path = os.path.join(SAVE_DIR, f"smoothing_results_{PROBE_DATASET}.json")
 with open(results_path, 'w') as f:
@@ -1308,14 +1389,16 @@ manifold_summary = [{'idx': r['idx'], 'label_true': r['label_true'], 'pred_orig'
                      'mean_concept_survival': r.get('mean_concept_survival_manifold', None),
                      'n_concepts_certified': r.get('n_concepts_certified_manifold', None),
                      'min_concept_radius': r.get('min_concept_radius_manifold', None),
-                     'mean_concept_radius': r.get('mean_concept_radius_manifold', None)} for r in results]
+                     'mean_concept_radius': r.get('mean_concept_radius_manifold', None),
+                     'scores': r.get('scores_manifold', {})} for r in results]
 isotropic_summary = [{'idx': r['idx'], 'label_true': r['label_true'], 'pred_orig': r['pred_orig'],
                       'pred_smooth': r['pred_gaussian'], 'class_cert': r.get('class_cert_gaussian', {}),
                       'stable_class': r['stable_gaussian'], 'mean_overlap': r['overlap_gaussian'],
                       'mean_concept_survival': r.get('mean_concept_survival_gaussian', None),
                       'n_concepts_certified': r.get('n_concepts_certified_gaussian', None),
                       'min_concept_radius': r.get('min_concept_radius_gaussian', None),
-                      'mean_concept_radius': r.get('mean_concept_radius_gaussian', None)} for r in results]
+                      'mean_concept_radius': r.get('mean_concept_radius_gaussian', None),
+                      'scores': r.get('scores_gaussian', {})} for r in results]
 with open(os.path.join(manifold_dir, "summary.json"), 'w') as f:
     json.dump(manifold_summary, f, indent=2)
 with open(os.path.join(isotropic_dir, "summary.json"), 'w') as f:
