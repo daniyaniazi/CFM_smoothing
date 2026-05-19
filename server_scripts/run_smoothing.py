@@ -26,7 +26,9 @@ import json
 from pathlib import Path
 from collections import Counter
 from sklearn.decomposition import PCA
+from dataclasses import dataclass
 from scipy.stats import norm, binom, pearsonr, kendalltau
+from scipy.stats import beta as beta_dist
 from scipy.special import gammaln
 import matplotlib
 matplotlib.use('Agg')  # no display on server
@@ -50,12 +52,12 @@ PROBE_CONFIG = "lr0.0001_bs512_epo50_clCE_spL1_spl0.0max_no_threshold"
 # Smoothing parameters
 K_NEIGHBORS = 500
 SCALE_WEIGHT = float(os.environ.get('CFM_SIGMA', '0.7'))  # supports multi-sigma via env
-N_SMOOTH_SAMPLES = 100
+N_SMOOTH_SAMPLES = int(os.environ.get('CFM_N_SAMPLES', '100'))  # supports multi-N via env
 N_TARGETS = 500           # number of val images to certify
 N_VIZ = 10                # save detailed viz/JSON only for the first N images
 
 DATA_DIR = os.path.join(os.path.dirname(__file__), '..', 'smoothing_data')  # shared artifacts (vectors, index)
-SAVE_DIR = os.path.join(DATA_DIR, f'sigma_{SCALE_WEIGHT:.2f}')  # sigma-specific results
+SAVE_DIR = os.path.join(DATA_DIR, f'sigma_{SCALE_WEIGHT:.2f}_n{N_SMOOTH_SAMPLES}')  # sigma+N specific results
 os.makedirs(DATA_DIR, exist_ok=True)
 os.makedirs(SAVE_DIR, exist_ok=True)
 
@@ -68,24 +70,23 @@ os.makedirs(SAVE_DIR, exist_ok=True)
 CERTIFY_ALPHA = 0.001  # confidence level for Clopper-Pearson bounds
 
 def clopper_pearson_lower(n_success, n_total, alpha=CERTIFY_ALPHA):
-    """Lower bound on success probability (Clopper-Pearson)."""
+    """One-sided lower bound on success probability (Clopper-Pearson, Beta)."""
     if n_success == 0:
         return 0.0
-    return binom.ppf(alpha / 2, n_success, 1.0) / n_total if n_success > 0 else 0.0
+    return float(beta_dist.ppf(alpha, n_success, n_total - n_success + 1))
 
 def clopper_pearson_upper(n_success, n_total, alpha=CERTIFY_ALPHA):
-    """Upper bound on success probability (Clopper-Pearson)."""
+    """One-sided upper bound on success probability (Clopper-Pearson, Beta)."""
     if n_success == n_total:
         return 1.0
-    return binom.ppf(1 - alpha / 2, n_success + 1, 1.0) / n_total
+    return float(beta_dist.ppf(1 - alpha, n_success + 1, n_total - n_success))
 
 def certified_radius(sigma, p_a_lower, p_b_upper):
     """Cohen et al. certified L2 radius: r = σ/2 * (Φ⁻¹(p_A_lower) - Φ⁻¹(p_B_upper))"""
     if p_a_lower <= p_b_upper or p_a_lower <= 0.5:
         return 0.0  # abstain
-    # Clamp to avoid Φ⁻¹(0)=-∞ and Φ⁻¹(1)=+∞
-    p_a_lower = min(p_a_lower, 1.0 - 1e-8)
-    p_b_upper = max(p_b_upper, 1e-8)
+    # With proper Beta-based Clopper-Pearson, p_a_lower < 1 and p_b_upper > 0
+    # so Φ⁻¹ is always finite — no clamping needed.
     return sigma / 2.0 * (norm.ppf(p_a_lower) - norm.ppf(p_b_upper))
 
 def certify_class_votes(vote_counts, n_total, sigma):
@@ -186,38 +187,123 @@ def compute_concept_scores(cv_orig, cv_smoothed_avg, top_k=12):
     }
 
 
-def log_unit_ball_volume(d: int) -> float:
-    """Log of volume of unit ball in d dimensions: log(π^(d/2) / Γ(d/2+1))."""
-    return (d / 2.0) * np.log(np.pi) - gammaln(d / 2.0 + 1)
+# ═══════════════════════════════════════════════════════════════════════════════
+# Volume computation  (aligned with Jonas's framework)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def log_volume_isotropic(radius: float, k: int) -> float:
+    """Log-volume of isotropic certified region (k-ball of radius r).
+
+    V_k(r) = (π^(k/2) / Γ(k/2 + 1)) · r^k
+    """
+    if radius <= 0.0 or k <= 0:
+        return -np.inf
+    log_ck = (k / 2.0) * np.log(np.pi) - gammaln(k / 2.0 + 1.0)
+    return log_ck + k * np.log(radius)
+
+
+def log_volume_manifold(radius: float, eigenvalues: np.ndarray) -> float:
+    """Log-volume of manifold certified region (ellipsoid).
+
+    V_mani = C_k · r^k · √det(Λ)
+    """
+    eigenvalues = np.asarray(eigenvalues, dtype=np.float64)
+    k = len(eigenvalues)
+    if radius <= 0.0 or k <= 0:
+        return -np.inf
+    log_ball = log_volume_isotropic(radius, k)
+    log_det_half = 0.5 * np.sum(np.log(np.maximum(eigenvalues, 1e-30)))
+    return log_ball + log_det_half
+
+
+def log_volume_ratio(radius_mani: float, radius_iso: float,
+                     eigenvalues: np.ndarray) -> float:
+    """log(V_mani / V_iso) = k·log(r_mani/r_iso) + 0.5·Σlog(λ_i).
+
+    Two effects:
+        - Radius effect:   k·log(r_mani/r_iso)
+        - Geometry effect:  0.5·Σlog(λ_i)
+    """
+    eigenvalues = np.asarray(eigenvalues, dtype=np.float64)
+    k = len(eigenvalues)
+    if radius_iso <= 0.0 or radius_mani <= 0.0:
+        return 0.0
+    radius_effect = k * np.log(radius_mani / radius_iso)
+    geometry_effect = 0.5 * np.sum(np.log(np.maximum(eigenvalues, 1e-30)))
+    return radius_effect + geometry_effect
+
+
+@dataclass
+class EigenDiagnostics:
+    """Diagnostic stats for a set of PCA eigenvalues."""
+    k: int
+    lambda_min: float
+    lambda_max: float
+    condition_number: float
+    eigenvalue_sum: float
+    effective_rank: float   # exp(entropy of normalized eigenvalues)
+    log_det_half: float     # 0.5 · Σ log(λ_i) — the geometry factor
+
+    def to_dict(self) -> dict:
+        return {
+            'eigen_k': self.k,
+            'eigen_lambda_min': self.lambda_min,
+            'eigen_lambda_max': self.lambda_max,
+            'eigen_condition_number': self.condition_number,
+            'eigen_sum': self.eigenvalue_sum,
+            'eigen_effective_rank': self.effective_rank,
+            'eigen_log_det_half': self.log_det_half,
+        }
+
+
+def eigenvalue_diagnostics(eigenvalues: np.ndarray) -> EigenDiagnostics:
+    """Compute diagnostic statistics for eigenvalues."""
+    evals = np.asarray(eigenvalues, dtype=np.float64)
+    evals = np.maximum(evals, 1e-30)
+    k = len(evals)
+    p = evals / evals.sum()
+    entropy = -np.sum(p * np.log(p + 1e-30))
+    effective_rank = float(np.exp(entropy))
+    return EigenDiagnostics(
+        k=k,
+        lambda_min=float(evals.min()),
+        lambda_max=float(evals.max()),
+        condition_number=float(evals.max() / evals.min()),
+        eigenvalue_sum=float(evals.sum()),
+        effective_rank=effective_rank,
+        log_det_half=float(0.5 * np.sum(np.log(evals))),
+    )
 
 
 def compute_volumes(r_iso: float, r_mani: float, eigenvalues: np.ndarray, D: int) -> dict:
-    """Compute 4 certified volume quantities (log-space) per Jonas's framework.
+    """Compute certified volume quantities (log-space) per Jonas's framework.
 
     Qty 1: Ambient Iso Ball         = C_D · r_iso^D
     Qty 2: Projected Iso Ball       = C_k · r_iso^k
     Qty 3: Manifold-aware (iso r)   = C_k · r_iso^k · √det(Λ)
     Qty 4: Manifold Ellipsoid       = C_k · r_mani^k · √det(Λ)
     """
-    k = len(eigenvalues)
-    log_C_D = log_unit_ball_volume(D)
-    log_C_k = log_unit_ball_volume(k)
-    log_det_half = 0.5 * np.sum(np.log(eigenvalues + 1e-30))  # √det(Λ) in log
+    evals = np.asarray(eigenvalues, dtype=np.float64)
+    k = len(evals)
 
-    log_qty1 = (log_C_D + D * np.log(r_iso)) if r_iso > 0 else -np.inf
-    log_qty2 = (log_C_k + k * np.log(r_iso)) if r_iso > 0 else -np.inf
-    log_qty3 = (log_C_k + k * np.log(r_iso) + log_det_half) if r_iso > 0 else -np.inf
-    log_qty4 = (log_C_k + k * np.log(r_mani) + log_det_half) if r_mani > 0 else -np.inf
+    log_qty1 = log_volume_isotropic(r_iso, D)
+    log_qty2 = log_volume_isotropic(r_iso, k)
+    log_qty3 = log_volume_manifold(r_iso, evals)   # geometry-only (iso radius)
+    log_qty4 = log_volume_manifold(r_mani, evals)   # full manifold
+
+    diag = eigenvalue_diagnostics(evals)
 
     return {
-        'log_vol_iso_D': round(float(log_qty1), 4),     # Qty 1
-        'log_vol_iso_k': round(float(log_qty2), 4),     # Qty 2
-        'log_vol_mani_pred': round(float(log_qty3), 4), # Qty 3
+        'log_vol_iso_D': round(float(log_qty1), 4),       # Qty 1
+        'log_vol_iso_k': round(float(log_qty2), 4),       # Qty 2
+        'log_vol_mani_pred': round(float(log_qty3), 4),   # Qty 3
         'log_vol_mani_actual': round(float(log_qty4), 4), # Qty 4
+        'log_vol_ratio': round(float(log_volume_ratio(r_mani, r_iso, evals)), 4),
         'r_iso': round(float(r_iso), 6),
         'r_mani': round(float(r_mani), 6),
         'k': k,
         'D': D,
+        **diag.to_dict(),
     }
 
 
