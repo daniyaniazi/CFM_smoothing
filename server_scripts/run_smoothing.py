@@ -83,6 +83,9 @@ def certified_radius(sigma, p_a_lower, p_b_upper):
     """Cohen et al. certified L2 radius: r = σ/2 * (Φ⁻¹(p_A_lower) - Φ⁻¹(p_B_upper))"""
     if p_a_lower <= p_b_upper or p_a_lower <= 0.5:
         return 0.0  # abstain
+    # Clamp to avoid Φ⁻¹(0)=-∞ and Φ⁻¹(1)=+∞
+    p_a_lower = min(p_a_lower, 1.0 - 1e-8)
+    p_b_upper = max(p_b_upper, 1e-8)
     return sigma / 2.0 * (norm.ppf(p_a_lower) - norm.ppf(p_b_upper))
 
 def certify_class_votes(vote_counts, n_total, sigma):
@@ -1314,11 +1317,102 @@ with open(results_jsonl_path, 'r') as f:
                 pass
 
 print(f"Total results: {len(results)}")
+n = len(results)
 
-# --- Concept-level certification ---
+# Helper: filter out non-finite values for safe mean/median
+def _finite(vals):
+    return [v for v in vals if np.isfinite(v) and abs(v) < 1e30]
+
+def _safe_mean(vals):
+    fv = _finite(vals)
+    return np.mean(fv) if fv else float('nan')
+
+def _safe_median(vals):
+    fv = _finite(vals)
+    return np.median(fv) if fv else float('nan')
+
+# ==========================================================================
+# TABLE 1: DOWNSTREAM ACCURACY (no certification, just prediction quality)
+# ==========================================================================
 print(f"\n{'='*80}")
-print(f"CONCEPT CERTIFICATION (top-{orig_top_k} concepts, α={CERTIFY_ALPHA})")
+print("TABLE 1: DOWNSTREAM ACCURACY")
 print(f"{'='*80}")
+
+orig_correct = sum(1 for r in results if r['pred_orig'] == r['label_true'])
+m_correct = sum(1 for r in results if r['pred_manifold'] == r['label_true'])
+g_correct = sum(1 for r in results if r['pred_gaussian'] == r['label_true'])
+m_preserves = sum(1 for r in results if r['pred_manifold'] == r['pred_orig'])
+g_preserves = sum(1 for r in results if r['pred_gaussian'] == r['pred_orig'])
+
+print(f"{'Method':<18s} {'Accuracy':<16s} {'Preserves Orig':<18s}")
+print(f"{'-'*52}")
+print(f"{'Original':<18s} {orig_correct}/{n} ({orig_correct/n*100:.1f}%){'':>4s} {'—':<18s}")
+print(f"{'Manifold (σ={SCALE_WEIGHT})':<18s} {m_correct}/{n} ({m_correct/n*100:.1f}%){'':>4s} "
+      f"{m_preserves}/{n} ({m_preserves/n*100:.1f}%)")
+print(f"{'Gaussian (σ={SCALE_WEIGHT})':<18s} {g_correct}/{n} ({g_correct/n*100:.1f}%){'':>4s} "
+      f"{g_preserves}/{n} ({g_preserves/n*100:.1f}%)")
+
+# ==========================================================================
+# TABLE 2: CERTIFIED DOWNSTREAM ACCURACY (Cohen et al.)
+# ==========================================================================
+print(f"\n{'='*80}")
+print(f"TABLE 2: CERTIFIED DOWNSTREAM ACCURACY (Cohen et al., α={CERTIFY_ALPHA})")
+print(f"{'='*80}")
+
+def _class_stats(results, method):
+    """Extract class certification stats."""
+    cert_key = f'class_cert_{method}'
+    pred_key = f'pred_{method}'
+
+    n_certified = 0          # not abstained
+    n_correct_certified = 0  # certified AND matches true label
+    n_stable_certified = 0   # certified AND matches original pred
+    n_abstained = 0
+    radii = []
+    for r in results:
+        cc = r.get(cert_key, {})
+        if cc.get('abstained', True):
+            n_abstained += 1
+        else:
+            n_certified += 1
+            rad = cc.get('certified_radius', 0)
+            if np.isfinite(rad):
+                radii.append(rad)
+            if r[pred_key] == r['label_true']:
+                n_correct_certified += 1
+            if r[pred_key] == r['pred_orig']:
+                n_stable_certified += 1
+    return {
+        'n_certified': n_certified,
+        'n_correct_certified': n_correct_certified,
+        'n_stable_certified': n_stable_certified,
+        'certified_accuracy': n_correct_certified / n if n else 0,
+        'certified_stability': n_stable_certified / n if n else 0,
+        'abstain_rate': n_abstained / n if n else 0,
+        'mean_radius': np.mean(radii) if radii else 0,
+        'median_radius': np.median(radii) if radii else 0,
+        'max_radius': max(radii) if radii else 0,
+    }
+
+m_cls = _class_stats(results, 'manifold')
+g_cls = _class_stats(results, 'gaussian')
+
+print(f"{'Method':<18s} {'CertAcc↑':<12s} {'CertStab↑':<12s} {'Abstain↓':<10s} "
+      f"{'#Cert':<8s} {'MeanR↑':<10s} {'MedR':<10s}")
+print(f"{'-'*80}")
+for label, s in [('Manifold', m_cls), ('Gaussian', g_cls)]:
+    print(f"{label+f' (σ={SCALE_WEIGHT})':<18s} {s['certified_accuracy']:<12.3f} "
+          f"{s['certified_stability']:<12.3f} {s['abstain_rate']:<10.3f} "
+          f"{str(s['n_certified'])+'/'+str(n):<8s} "
+          f"{s['mean_radius']:<10.4f} {s['median_radius']:<10.4f}")
+
+# ==========================================================================
+# TABLE 3: CONCEPT-LEVEL CERTIFICATION (concept space radius)
+# ==========================================================================
+print(f"\n{'='*80}")
+print(f"TABLE 3: CONCEPT CERTIFICATION (top-{orig_top_k} concepts, α={CERTIFY_ALPHA})")
+print(f"{'='*80}")
+
 m_surv = [r.get('mean_concept_survival_manifold', 0) for r in results]
 g_surv = [r.get('mean_concept_survival_gaussian', 0) for r in results]
 m_cert = [r.get('n_concepts_certified_manifold', 0) for r in results]
@@ -1330,96 +1424,76 @@ g_mean_r = [r.get('mean_concept_radius_gaussian', 0) for r in results]
 m_overlap = [r.get('overlap_manifold', 0) for r in results]
 g_overlap = [r.get('overlap_gaussian', 0) for r in results]
 
-header = f"{'Method':<12s} {'Survival':<10s} {'#Cert/'+str(orig_top_k):<10s} {'Overlap':<10s} {'MinRadius':<12s} {'MeanRadius':<12s}"
-print(header)
-print(f"{'-'*66}")
-print(f"{'Manifold':<12s} {np.mean(m_surv):<10.3f} {np.mean(m_cert):<10.1f} {np.mean(m_overlap):<10.3f} "
-      f"{np.mean(m_min_r):<12.4f} {np.mean(m_mean_r):<12.4f}")
-print(f"{'Gaussian':<12s} {np.mean(g_surv):<10.3f} {np.mean(g_cert):<10.1f} {np.mean(g_overlap):<10.3f} "
-      f"{np.mean(g_min_r):<12.4f} {np.mean(g_mean_r):<12.4f}")
+print(f"{'Method':<18s} {'Survival↑':<10s} {'#Cert/'+str(orig_top_k)+'↑':<10s} {'Overlap↑':<10s} "
+      f"{'MeanR↑':<12s} {'MinR':<12s}")
+print(f"{'-'*72}")
+print(f"{'Manifold':<18s} {np.mean(m_surv):<10.3f} {np.mean(m_cert):<10.1f} {np.mean(m_overlap):<10.3f} "
+      f"{_safe_mean(m_mean_r):<12.4f} {_safe_mean(m_min_r):<12.4f}")
+print(f"{'Gaussian':<18s} {np.mean(g_surv):<10.3f} {np.mean(g_cert):<10.1f} {np.mean(g_overlap):<10.3f} "
+      f"{_safe_mean(g_mean_r):<12.4f} {_safe_mean(g_min_r):<12.4f}")
 
-# --- Downstream class certification ---
+# ==========================================================================
+# TABLE 4: CONCEPT STABILITY SCORES
+# ==========================================================================
 print(f"\n{'='*80}")
-print(f"DOWNSTREAM CLASS CERTIFICATION (Cohen et al., α={CERTIFY_ALPHA})")
-print(f"{'='*80}")
-
-def _class_stats(results, method):
-    """Extract class certification stats."""
-    cert_key = f'class_cert_{method}'
-    stable_key = f'stable_{method}'
-    pred_key = f'pred_{method}'
-
-    n_correct_certified = 0
-    n_abstained = 0
-    radii = []
-    for r in results:
-        cc = r.get(cert_key, {})
-        if cc.get('abstained', True):
-            n_abstained += 1
-        else:
-            if r[pred_key] == r['pred_orig']:  # prediction matches original
-                n_correct_certified += 1
-            radii.append(cc.get('certified_radius', 0))
-    n = len(results)
-    return {
-        'certified_accuracy': n_correct_certified / n if n else 0,
-        'abstain_rate': n_abstained / n if n else 0,
-        'n_certified': n - n_abstained,
-        'n_correct_certified': n_correct_certified,
-        'mean_radius': np.mean(radii) if radii else 0,
-        'median_radius': np.median(radii) if radii else 0,
-        'max_radius': max(radii) if radii else 0,
-    }
-
-m_cls = _class_stats(results, 'manifold')
-g_cls = _class_stats(results, 'gaussian')
-n = len(results)
-
-header2 = f"{'Method':<12s} {'CertAcc':<10s} {'Abstain':<10s} {'#Cert':<8s} {'MeanR':<10s} {'MedianR':<10s} {'MaxR':<10s}"
-print(header2)
-print(f"{'-'*70}")
-print(f"{'Manifold':<12s} {m_cls['certified_accuracy']:<10.3f} {m_cls['abstain_rate']:<10.3f} "
-      f"{str(m_cls['n_certified'])+'/'+str(n):<8s} "
-      f"{m_cls['mean_radius']:<10.4f} {m_cls['median_radius']:<10.4f} {m_cls['max_radius']:<10.4f}")
-print(f"{'Gaussian':<12s} {g_cls['certified_accuracy']:<10.3f} {g_cls['abstain_rate']:<10.3f} "
-      f"{str(g_cls['n_certified'])+'/'+str(n):<8s} "
-      f"{g_cls['mean_radius']:<10.4f} {g_cls['median_radius']:<10.4f} {g_cls['max_radius']:<10.4f}")
-
-# --- Concept Stability Scores (paper-ready) ---
-print(f"\n{'='*80}")
-print("CONCEPT STABILITY SCORES (paper-ready)")
+print("TABLE 4: CONCEPT STABILITY SCORES")
 print(f"{'='*80}")
 score_keys = ['concept_fidelity', 'rank_correlation', 'concept_drift',
               'spurious_act_rate', 'act_drop_score', 'act_gain_score']
-score_labels = ['Fidelity(r)', 'RankCorr(τ)', 'Drift(L2)', 'SAR', 'ADS', 'AGS']
-header3 = f"{'Method':<12s} " + " ".join(f"{l:<12s}" for l in score_labels)
-print(header3)
-print(f"{'-'*86}")
+score_labels = ['Fidelity(r)↑', 'RankCorr(τ)↑', 'Drift(L2)↓', 'SAR↓', 'ADS↓', 'AGS↓']
+print(f"{'Method':<18s} " + " ".join(f"{l:<13s}" for l in score_labels))
+print(f"{'-'*98}")
 for method, label in [('manifold', 'Manifold'), ('gaussian', 'Gaussian')]:
     vals = []
     for k in score_keys:
         v = [r.get(f'scores_{method}', {}).get(k, 0) for r in results]
         vals.append(np.mean(v))
-    print(f"{label:<12s} " + " ".join(f"{v:<12.4f}" for v in vals))
+    print(f"{label:<18s} " + " ".join(f"{v:<13.4f}" for v in vals))
 
-# --- Volume framework ---
+# ==========================================================================
+# TABLE 5: CERTIFIED VOLUME (4 quantities, log-space)
+# ==========================================================================
 print(f"\n{'='*80}")
-print("CERTIFIED VOLUME (log-space)")
+print("TABLE 5: CERTIFIED VOLUME (log-space, finite samples only)")
 print(f"{'='*80}")
 vol_keys = ['log_vol_iso_D', 'log_vol_iso_k', 'log_vol_mani_pred', 'log_vol_mani_actual']
-vol_labels = ['Qty1(IsoD)', 'Qty2(Isok)', 'Qty3(ManiPred)', 'Qty4(ManiActual)']
-header4 = f"{'Metric':<18s} {'Mean':<12s} {'Median':<12s} {'Std':<12s}"
-print(header4)
-print(f"{'-'*54}")
+vol_labels = ['Qty1: Iso Ball (D)',
+              'Qty2: Iso Ball (k)',
+              'Qty3: Mani w/ iso-r',
+              'Qty4: Mani Ellipsoid']
+vol_descriptions = [
+    'C_D · r_iso^D          (ambient isotropic ball)',
+    'C_k · r_iso^k          (projected isotropic ball)',
+    'C_k · r_iso^k · √det(Λ) (manifold-aware, iso radius)',
+    'C_k · r_mani^k · √det(Λ) (manifold ellipsoid, mani radius)',
+]
+
+# Collect r_iso and r_mani
+r_isos = [r.get('volumes', {}).get('r_iso', 0) for r in results]
+r_manis = [r.get('volumes', {}).get('r_mani', 0) for r in results]
+
+print(f"\n  σ = {SCALE_WEIGHT}")
+print(f"  r_iso  (Gaussian cert radius): mean={_safe_mean(r_isos):.4f}, "
+      f"median={_safe_median(r_isos):.4f}, >0: {sum(1 for r in r_isos if r > 0)}/{n}")
+print(f"  r_mani (Manifold cert radius): mean={_safe_mean(r_manis):.4f}, "
+      f"median={_safe_median(r_manis):.4f}, >0: {sum(1 for r in r_manis if r > 0)}/{n}")
+mean_k = np.mean([r.get('n_eigenvalues', 0) for r in results])
+print(f"  Effective manifold dim: mean k={mean_k:.1f} / D={len(cv_orig)}")
+
+print(f"\n{'Quantity':<25s} {'Mean':<12s} {'Median':<12s} {'Std':<12s} {'#Finite':<10s}")
+print(f"{'-'*71}")
 for vk, vl in zip(vol_keys, vol_labels):
     vals = [r.get('volumes', {}).get(vk, -np.inf) for r in results]
-    vals_finite = [v for v in vals if v > -1e30]
-    if vals_finite:
-        print(f"{vl:<18s} {np.mean(vals_finite):<12.2f} {np.median(vals_finite):<12.2f} {np.std(vals_finite):<12.2f}")
+    fv = _finite(vals)
+    n_fin = len(fv)
+    if fv:
+        print(f"{vl:<25s} {np.mean(fv):<12.2f} {np.median(fv):<12.2f} {np.std(fv):<12.2f} {n_fin}/{n}")
     else:
-        print(f"{vl:<18s} {'N/A':<12s} {'N/A':<12s} {'N/A':<12s}")
-mean_k = np.mean([r.get('n_eigenvalues', 0) for r in results])
-print(f"\nEffective manifold dim (mean): k={mean_k:.1f} / D={len(cv_orig)}")
+        print(f"{vl:<25s} {'N/A':<12s} {'N/A':<12s} {'N/A':<12s} {n_fin}/{n}")
+
+print(f"\nNote: Qty1-3 are -Inf when r_iso=0 (Gaussian abstained).")
+print(f"      Qty4 is -Inf when r_mani=0 (Manifold abstained).")
+print(f"      Means are computed over finite values only.")
 
 # Write final JSON summaries
 results_path = os.path.join(SAVE_DIR, f"smoothing_results_{PROBE_DATASET}.json")
