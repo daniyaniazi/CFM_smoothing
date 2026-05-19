@@ -787,60 +787,61 @@ for loop_i, target_idx in enumerate(TARGET_IDCS):
                      fontsize=11, fontweight='bold')
         ax.set_xlabel('PC1'); ax.set_ylabel('PC2'); ax.legend(fontsize=8); ax.grid(True, alpha=0.3)
 
-        # Row 1, Panel 3: Manifold concept bar chart (top activations)
+        # Row 1, Panel 3: Top Activations — ranked by SMOOTHED score, show both orig & smoothed
         ax = axes[0, 2]
         n_show = 20
-        orig_top_concepts = get_top_concept_info(cv_orig, concept_names, top_k=n_show)
-        final_top_concepts = get_top_concept_info(cv_smoothed_avg, concept_names, top_k=n_show)
-        all_names = []
-        for n, _ in orig_top_concepts:
-            if n not in all_names: all_names.append(n)
-        for n, _ in final_top_concepts:
-            if n not in all_names: all_names.append(n)
-        all_names = all_names[:25]
-        # Build full lookup from vectors (not just top-20) so no concept shows 0 incorrectly
         name_to_idx = {(concept_names[i] if concept_names else f"c_{i}"): i for i in range(len(cv_orig))}
-        orig_vals_bar = [float(cv_orig[name_to_idx[n]]) if n in name_to_idx else 0 for n in all_names]
-        smooth_vals_bar = [float(cv_smoothed_avg[name_to_idx[n]]) if n in name_to_idx else 0 for n in all_names]
-        y_pos = np.arange(len(all_names))
-        ax.barh(y_pos - 0.2, orig_vals_bar, height=0.35, color='steelblue', label='Original', alpha=0.8)
-        ax.barh(y_pos + 0.2, smooth_vals_bar, height=0.35, color='coral', label='Manifold avg', alpha=0.8)
-        ax.set_yticks(y_pos); ax.set_yticklabels([n[:22] for n in all_names], fontsize=8)
-        ax.invert_yaxis(); ax.set_xlabel('Activation')
+        # Rank by smoothed (manifold) activation descending
+        smooth_top_idxs = np.argsort(-cv_smoothed_avg)[:n_show]
+        top_names = [(concept_names[i] if concept_names else f"c_{i}") for i in smooth_top_idxs]
+        top_orig_vals = [float(cv_orig[i]) for i in smooth_top_idxs]
+        top_smooth_vals = [float(cv_smoothed_avg[i]) for i in smooth_top_idxs]
+
+        # Compute shared x-axis max across all 3 bar panels
+        all_bar_vals = top_orig_vals + top_smooth_vals
+        if m_drops:
+            all_bar_vals += [d[2] for d in m_drops[:10]] + [d[3] for d in m_drops[:10]]
+        if m_least:
+            all_bar_vals += [l[2] for l in m_least[:10]] + [l[1] for l in m_least[:10]]
+        shared_xlim = max(all_bar_vals) * 1.08 if all_bar_vals else 1.0
+
+        y_pos = np.arange(n_show)
+        ax.barh(y_pos - 0.2, top_orig_vals[::-1], height=0.35, color='steelblue', label='Original', alpha=0.8)
+        ax.barh(y_pos + 0.2, top_smooth_vals[::-1], height=0.35, color='coral', label='Manifold avg', alpha=0.8)
+        ax.set_yticks(y_pos); ax.set_yticklabels([n[:22] for n in top_names[::-1]], fontsize=8)
+        ax.set_xlim(0, shared_xlim); ax.set_xlabel('Activation')
         ax.set_title(f'Top Activations: {get_class_name(PROBE_DATASET, pred_orig)} → '
                      f'{get_class_name(PROBE_DATASET, pred_smooth)} '
                      f'({"STABLE ✓" if pred_orig == pred_smooth else "CHANGED ✗"})',
                      fontsize=11, fontweight='bold')
         ax.legend(fontsize=8); ax.grid(True, axis='x', alpha=0.3)
 
-        # Row 2, Panel 1: Top DROPS (concepts suppressed by smoothing)
+        # Row 2, Panel 1: Top DROPS (had score in original, suppressed after smoothing)
         ax = axes[1, 0]
         if m_drops:
             drop_names = [d[0][:22] for d in m_drops[:10]]
             drop_orig = [d[2] for d in m_drops[:10]]
             drop_smooth = [d[3] for d in m_drops[:10]]
             y_d = np.arange(len(drop_names))
-            ax.barh(y_d - 0.2, drop_orig, height=0.35, color='steelblue', label='Original', alpha=0.8)
-            ax.barh(y_d + 0.2, drop_smooth, height=0.35, color='#d32f2f', label='After smoothing', alpha=0.8)
-            ax.set_yticks(y_d); ax.set_yticklabels(drop_names, fontsize=8)
-            ax.invert_yaxis()
-        ax.set_xlabel('Activation')
+            ax.barh(y_d - 0.2, drop_orig[::-1], height=0.35, color='steelblue', label='Original', alpha=0.8)
+            ax.barh(y_d + 0.2, drop_smooth[::-1], height=0.35, color='#d32f2f', label='After smoothing', alpha=0.8)
+            ax.set_yticks(y_d); ax.set_yticklabels(drop_names[::-1], fontsize=8)
+        ax.set_xlim(0, shared_xlim); ax.set_xlabel('Activation')
         ax.set_title('Manifold: Top Drops (suppressed)', fontsize=11, fontweight='bold', color='#d32f2f')
         ax.legend(fontsize=8); ax.grid(True, axis='x', alpha=0.3)
 
-        # Row 2, Panel 2: Least activated (originally active, weakest after smoothing)
+        # Row 2, Panel 2: Least Activated (lowest manifold activation, show original for comparison)
         ax = axes[1, 1]
         if m_least:
             least_names = [l[0][:22] for l in m_least[:10]]
             least_orig = [l[2] for l in m_least[:10]]
             least_smooth = [l[1] for l in m_least[:10]]
             y_l = np.arange(len(least_names))
-            ax.barh(y_l - 0.2, least_orig, height=0.35, color='steelblue', label='Original', alpha=0.8)
-            ax.barh(y_l + 0.2, least_smooth, height=0.35, color='#757575', label='After smoothing', alpha=0.8)
-            ax.set_yticks(y_l); ax.set_yticklabels(least_names, fontsize=8)
-            ax.invert_yaxis()
-        ax.set_xlabel('Activation')
-        ax.set_title('Manifold: Least Activated (weakest survivors)', fontsize=11, fontweight='bold', color='#757575')
+            ax.barh(y_l - 0.2, least_orig[::-1], height=0.35, color='steelblue', label='Original', alpha=0.8)
+            ax.barh(y_l + 0.2, least_smooth[::-1], height=0.35, color='#757575', label='Manifold', alpha=0.8)
+            ax.set_yticks(y_l); ax.set_yticklabels(least_names[::-1], fontsize=8)
+        ax.set_xlim(0, shared_xlim); ax.set_xlabel('Activation')
+        ax.set_title('Manifold: Least Activated', fontsize=11, fontweight='bold', color='#757575')
         ax.legend(fontsize=8); ax.grid(True, axis='x', alpha=0.3)
 
         # Row 2, Panel 3: empty
@@ -927,22 +928,27 @@ for loop_i, target_idx in enumerate(TARGET_IDCS):
                      fontsize=11, fontweight='bold')
         ax.set_xlabel('PC1'); ax.set_ylabel('PC2'); ax.legend(fontsize=8); ax.grid(True, alpha=0.3)
 
-        # Row 1, Panel 3: Isotropic concept bar chart (top activations)
+        # Row 1, Panel 3: Top Activations — ranked by SMOOTHED (isotropic) score
         ax = axes[0, 2]
-        gauss_top_concepts = get_top_concept_info(cv_gauss_avg, concept_names, top_k=n_show)
-        all_names_g = []
-        for n, _ in orig_top_concepts:
-            if n not in all_names_g: all_names_g.append(n)
-        for n, _ in gauss_top_concepts:
-            if n not in all_names_g: all_names_g.append(n)
-        all_names_g = all_names_g[:25]
-        orig_vals_bar_g = [float(cv_orig[name_to_idx[n]]) if n in name_to_idx else 0 for n in all_names_g]
-        smooth_vals_bar_g = [float(cv_gauss_avg[name_to_idx[n]]) if n in name_to_idx else 0 for n in all_names_g]
-        y_pos_g = np.arange(len(all_names_g))
-        ax.barh(y_pos_g - 0.2, orig_vals_bar_g, height=0.35, color='steelblue', label='Original', alpha=0.8)
-        ax.barh(y_pos_g + 0.2, smooth_vals_bar_g, height=0.35, color='coral', label='Isotropic avg', alpha=0.8)
-        ax.set_yticks(y_pos_g); ax.set_yticklabels([n[:22] for n in all_names_g], fontsize=8)
-        ax.invert_yaxis(); ax.set_xlabel('Activation')
+        n_show = 20
+        gauss_top_idxs = np.argsort(-cv_gauss_avg)[:n_show]
+        g_top_names = [(concept_names[i] if concept_names else f"c_{i}") for i in gauss_top_idxs]
+        g_top_orig_vals = [float(cv_orig[i]) for i in gauss_top_idxs]
+        g_top_smooth_vals = [float(cv_gauss_avg[i]) for i in gauss_top_idxs]
+
+        # Shared x-axis max across all 3 bar panels
+        g_all_bar_vals = g_top_orig_vals + g_top_smooth_vals
+        if g_drops:
+            g_all_bar_vals += [d[2] for d in g_drops[:10]] + [d[3] for d in g_drops[:10]]
+        if g_least:
+            g_all_bar_vals += [l[2] for l in g_least[:10]] + [l[1] for l in g_least[:10]]
+        g_shared_xlim = max(g_all_bar_vals) * 1.08 if g_all_bar_vals else 1.0
+
+        y_pos_g = np.arange(n_show)
+        ax.barh(y_pos_g - 0.2, g_top_orig_vals[::-1], height=0.35, color='steelblue', label='Original', alpha=0.8)
+        ax.barh(y_pos_g + 0.2, g_top_smooth_vals[::-1], height=0.35, color='coral', label='Isotropic avg', alpha=0.8)
+        ax.set_yticks(y_pos_g); ax.set_yticklabels([n[:22] for n in g_top_names[::-1]], fontsize=8)
+        ax.set_xlim(0, g_shared_xlim); ax.set_xlabel('Activation')
         ax.set_title(f'Top Activations: {get_class_name(PROBE_DATASET, pred_orig)} → '
                      f'{get_class_name(PROBE_DATASET, pred_gauss)} '
                      f'({"STABLE ✓" if pred_orig == pred_gauss else "CHANGED ✗"})',
@@ -956,27 +962,25 @@ for loop_i, target_idx in enumerate(TARGET_IDCS):
             drop_orig = [d[2] for d in g_drops[:10]]
             drop_smooth = [d[3] for d in g_drops[:10]]
             y_d = np.arange(len(drop_names))
-            ax.barh(y_d - 0.2, drop_orig, height=0.35, color='steelblue', label='Original', alpha=0.8)
-            ax.barh(y_d + 0.2, drop_smooth, height=0.35, color='#d32f2f', label='After smoothing', alpha=0.8)
-            ax.set_yticks(y_d); ax.set_yticklabels(drop_names, fontsize=8)
-            ax.invert_yaxis()
-        ax.set_xlabel('Activation')
+            ax.barh(y_d - 0.2, drop_orig[::-1], height=0.35, color='steelblue', label='Original', alpha=0.8)
+            ax.barh(y_d + 0.2, drop_smooth[::-1], height=0.35, color='#d32f2f', label='After smoothing', alpha=0.8)
+            ax.set_yticks(y_d); ax.set_yticklabels(drop_names[::-1], fontsize=8)
+        ax.set_xlim(0, g_shared_xlim); ax.set_xlabel('Activation')
         ax.set_title('Isotropic: Top Drops (suppressed)', fontsize=11, fontweight='bold', color='#d32f2f')
         ax.legend(fontsize=8); ax.grid(True, axis='x', alpha=0.3)
 
-        # Row 2, Panel 2: Least activated (originally active, weakest after smoothing)
+        # Row 2, Panel 2: Least Activated
         ax = axes[1, 1]
         if g_least:
             least_names = [l[0][:22] for l in g_least[:10]]
             least_orig = [l[2] for l in g_least[:10]]
             least_smooth = [l[1] for l in g_least[:10]]
             y_l = np.arange(len(least_names))
-            ax.barh(y_l - 0.2, least_orig, height=0.35, color='steelblue', label='Original', alpha=0.8)
-            ax.barh(y_l + 0.2, least_smooth, height=0.35, color='#757575', label='After smoothing', alpha=0.8)
-            ax.set_yticks(y_l); ax.set_yticklabels(least_names, fontsize=8)
-            ax.invert_yaxis()
-        ax.set_xlabel('Activation')
-        ax.set_title('Isotropic: Least Activated (weakest survivors)', fontsize=11, fontweight='bold', color='#757575')
+            ax.barh(y_l - 0.2, least_orig[::-1], height=0.35, color='steelblue', label='Original', alpha=0.8)
+            ax.barh(y_l + 0.2, least_smooth[::-1], height=0.35, color='#757575', label='Isotropic', alpha=0.8)
+            ax.set_yticks(y_l); ax.set_yticklabels(least_names[::-1], fontsize=8)
+        ax.set_xlim(0, g_shared_xlim); ax.set_xlabel('Activation')
+        ax.set_title('Isotropic: Least Activated', fontsize=11, fontweight='bold', color='#757575')
         ax.legend(fontsize=8); ax.grid(True, axis='x', alpha=0.3)
 
         # Row 2, Panel 3: empty
