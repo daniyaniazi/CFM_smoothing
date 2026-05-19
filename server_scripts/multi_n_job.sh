@@ -4,8 +4,8 @@
 #SBATCH --gres gpu:1
 #SBATCH -c 8
 #SBATCH --mem-per-cpu=16G
-#SBATCH -o /BS/dniazi_thesis/work/CFM_smoothing/output/slurm/smoothing_grid-%a-%j.out
-#SBATCH -e /BS/dniazi_thesis/work/CFM_smoothing/output/slurm/smoothing_grid-%a-%j.err
+#SBATCH -o /BS/dniazi_thesis/work/CFM_smoothing/output/slurm/cfm-grid-%a-%j.out
+#SBATCH -e /BS/dniazi_thesis/work/CFM_smoothing/output/slurm/cfm-grid-%a-%j.err
 #SBATCH -J cfm-grid
 #SBATCH --array=0-24
 
@@ -31,6 +31,9 @@ N_IDX=$((SLURM_ARRAY_TASK_ID % 5))
 
 export CFM_SIGMA=${SIGMAS[$SIGMA_IDX]}
 export CFM_N_SAMPLES=${N_VALUES[$N_IDX]}
+
+# Rename job so squeue shows sigma and N
+scontrol update JobId=${SLURM_JOB_ID} Name="cfm-s${CFM_SIGMA}-n${CFM_N_SAMPLES}"
 
 echo "================================================"
 echo "CFM Smoothing — sigma=$CFM_SIGMA, N=$CFM_N_SAMPLES"
