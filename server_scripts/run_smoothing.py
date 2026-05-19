@@ -27,6 +27,7 @@ from pathlib import Path
 from collections import Counter
 from sklearn.decomposition import PCA
 from scipy.stats import norm, binom, pearsonr, kendalltau
+from scipy.special import gammaln
 import matplotlib
 matplotlib.use('Agg')  # no display on server
 import matplotlib.pyplot as plt
@@ -48,12 +49,14 @@ PROBE_CONFIG = "lr0.0001_bs512_epo50_clCE_spL1_spl0.0max_no_threshold"
 
 # Smoothing parameters
 K_NEIGHBORS = 500
-SCALE_WEIGHT = 0.7
+SCALE_WEIGHT = float(os.environ.get('CFM_SIGMA', '0.7'))  # supports multi-sigma via env
 N_SMOOTH_SAMPLES = 100
 N_TARGETS = 500           # number of val images to certify
 N_VIZ = 10                # save detailed viz/JSON only for the first N images
 
-SAVE_DIR = os.path.join(os.path.dirname(__file__), '..', 'smoothing_data')
+DATA_DIR = os.path.join(os.path.dirname(__file__), '..', 'smoothing_data')  # shared artifacts (vectors, index)
+SAVE_DIR = os.path.join(DATA_DIR, f'sigma_{SCALE_WEIGHT:.2f}')  # sigma-specific results
+os.makedirs(DATA_DIR, exist_ok=True)
 os.makedirs(SAVE_DIR, exist_ok=True)
 
 
@@ -180,6 +183,41 @@ def compute_concept_scores(cv_orig, cv_smoothed_avg, top_k=12):
     }
 
 
+def log_unit_ball_volume(d: int) -> float:
+    """Log of volume of unit ball in d dimensions: log(π^(d/2) / Γ(d/2+1))."""
+    return (d / 2.0) * np.log(np.pi) - gammaln(d / 2.0 + 1)
+
+
+def compute_volumes(r_iso: float, r_mani: float, eigenvalues: np.ndarray, D: int) -> dict:
+    """Compute 4 certified volume quantities (log-space) per Jonas's framework.
+
+    Qty 1: Ambient Iso Ball         = C_D · r_iso^D
+    Qty 2: Projected Iso Ball       = C_k · r_iso^k
+    Qty 3: Manifold-aware (iso r)   = C_k · r_iso^k · √det(Λ)
+    Qty 4: Manifold Ellipsoid       = C_k · r_mani^k · √det(Λ)
+    """
+    k = len(eigenvalues)
+    log_C_D = log_unit_ball_volume(D)
+    log_C_k = log_unit_ball_volume(k)
+    log_det_half = 0.5 * np.sum(np.log(eigenvalues + 1e-30))  # √det(Λ) in log
+
+    log_qty1 = (log_C_D + D * np.log(r_iso)) if r_iso > 0 else -np.inf
+    log_qty2 = (log_C_k + k * np.log(r_iso)) if r_iso > 0 else -np.inf
+    log_qty3 = (log_C_k + k * np.log(r_iso) + log_det_half) if r_iso > 0 else -np.inf
+    log_qty4 = (log_C_k + k * np.log(r_mani) + log_det_half) if r_mani > 0 else -np.inf
+
+    return {
+        'log_vol_iso_D': round(float(log_qty1), 4),     # Qty 1
+        'log_vol_iso_k': round(float(log_qty2), 4),     # Qty 2
+        'log_vol_mani_pred': round(float(log_qty3), 4), # Qty 3
+        'log_vol_mani_actual': round(float(log_qty4), 4), # Qty 4
+        'r_iso': round(float(r_iso), 6),
+        'r_mani': round(float(r_mani), 6),
+        'k': k,
+        'D': D,
+    }
+
+
 def classify_concept_vector(cv, classifier_weights):
     logits = cv @ classifier_weights.T
     return logits.argmax().item()
@@ -294,10 +332,10 @@ print("\n" + "=" * 70)
 print("Loading cached concept vectors")
 print("=" * 70)
 
-train_cv_path = os.path.join(SAVE_DIR, f"concept_vectors_{PROBE_DATASET}_train.pt")
-train_labels_path = os.path.join(SAVE_DIR, f"labels_{PROBE_DATASET}_train.pt")
-val_cv_path = os.path.join(SAVE_DIR, f"concept_vectors_{PROBE_DATASET}_val.pt")
-val_labels_path = os.path.join(SAVE_DIR, f"labels_{PROBE_DATASET}_val.pt")
+train_cv_path = os.path.join(DATA_DIR, f"concept_vectors_{PROBE_DATASET}_train.pt")
+train_labels_path = os.path.join(DATA_DIR, f"labels_{PROBE_DATASET}_train.pt")
+val_cv_path = os.path.join(DATA_DIR, f"concept_vectors_{PROBE_DATASET}_val.pt")
+val_labels_path = os.path.join(DATA_DIR, f"labels_{PROBE_DATASET}_val.pt")
 
 for p in [train_cv_path, train_labels_path, val_cv_path, val_labels_path]:
     if not os.path.exists(p):
@@ -342,7 +380,7 @@ import glob
 N_TRAIN = train_concept_vectors.shape[0]
 CONCEPT_DIM = train_concept_vectors.shape[1]
 
-index_pattern = os.path.join(SAVE_DIR, f"knn_concepts_{PROBE_DATASET}_train_*.ann")
+index_pattern = os.path.join(DATA_DIR, f"knn_concepts_{PROBE_DATASET}_train_*.ann")
 available_indices = sorted(glob.glob(index_pattern), key=os.path.getsize, reverse=True)
 
 index_path = None
@@ -1236,6 +1274,14 @@ for loop_i, target_idx in enumerate(TARGET_IDCS):
     scores_manifold = compute_concept_scores(cv_orig, cv_smoothed_avg)
     scores_gaussian = compute_concept_scores(cv_orig, cv_gauss_avg)
 
+    # Volume framework (Jonas): r_iso from gaussian, r_mani from manifold
+    r_iso = gauss_class_cert['certified_radius']
+    r_mani = class_cert['certified_radius']
+    # Filter eigenvalues to non-trivial components
+    ev_positive = ev[ev > 1e-10]
+    CONCEPT_DIM = len(cv_orig)
+    volumes = compute_volumes(r_iso, r_mani, ev_positive, D=CONCEPT_DIM)
+
     result_row = {
         'idx': target_idx,
         'label_true': label_true,
@@ -1266,6 +1312,10 @@ for loop_i, target_idx in enumerate(TARGET_IDCS):
         'stable_gaussian': pred_orig == pred_gauss and not gauss_class_cert['abstained'],
         # === Concept stability scores (gaussian) ===
         'scores_gaussian': scores_gaussian,
+        # === Volume framework ===
+        'volumes': volumes,
+        'n_eigenvalues': len(ev_positive),
+        'top_eigenvalues': [round(float(e), 6) for e in ev_positive[:10]],
     }
     results_jsonl_file.write(json.dumps(result_row) + '\n')
     results_jsonl_file.flush()
@@ -1377,6 +1427,25 @@ for method, label in [('manifold', 'Manifold'), ('gaussian', 'Gaussian')]:
         v = [r.get(f'scores_{method}', {}).get(k, 0) for r in results]
         vals.append(np.mean(v))
     print(f"{label:<12s} " + " ".join(f"{v:<12.4f}" for v in vals))
+
+# --- Volume framework ---
+print(f"\n{'='*80}")
+print("CERTIFIED VOLUME (log-space)")
+print(f"{'='*80}")
+vol_keys = ['log_vol_iso_D', 'log_vol_iso_k', 'log_vol_mani_pred', 'log_vol_mani_actual']
+vol_labels = ['Qty1(IsoD)', 'Qty2(Isok)', 'Qty3(ManiPred)', 'Qty4(ManiActual)']
+header4 = f"{'Metric':<18s} {'Mean':<12s} {'Median':<12s} {'Std':<12s}"
+print(header4)
+print(f"{'-'*54}")
+for vk, vl in zip(vol_keys, vol_labels):
+    vals = [r.get('volumes', {}).get(vk, -np.inf) for r in results]
+    vals_finite = [v for v in vals if v > -1e30]
+    if vals_finite:
+        print(f"{vl:<18s} {np.mean(vals_finite):<12.2f} {np.median(vals_finite):<12.2f} {np.std(vals_finite):<12.2f}")
+    else:
+        print(f"{vl:<18s} {'N/A':<12s} {'N/A':<12s} {'N/A':<12s}")
+mean_k = np.mean([r.get('n_eigenvalues', 0) for r in results])
+print(f"\nEffective manifold dim (mean): k={mean_k:.1f} / D={len(cv_orig)}")
 
 # Write final JSON summaries
 results_path = os.path.join(SAVE_DIR, f"smoothing_results_{PROBE_DATASET}.json")
