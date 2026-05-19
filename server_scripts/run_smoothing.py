@@ -249,7 +249,7 @@ def get_concept_changes(cv_orig, cv_smoothed, concept_names, top_k=10):
     drops = [(concept_names[i] if concept_names else f"c_{i}",
               round(float(diff[i]), 4), round(float(cv_o[i]), 4), round(float(cv_s[i]), 4))
              for i in drop_idxs if diff[i] > 0]
-    # Top gains: concepts that increased the most
+    # Top gains: concepts that increased the most in magnitude after smoothing
     gain_idxs = np.argsort(diff)[:top_k]  # largest negative diff = biggest gain
     gains = [(concept_names[i] if concept_names else f"c_{i}",
               round(float(-diff[i]), 4), round(float(cv_o[i]), 4), round(float(cv_s[i]), 4))
@@ -805,11 +805,13 @@ for loop_i, target_idx in enumerate(TARGET_IDCS):
         for n, _ in final_top_concepts:
             if n not in all_names: all_names.append(n)
         all_names = all_names[:25]
-        orig_dict = {n: v for n, v in orig_top_concepts}
-        final_dict = {n: v for n, v in final_top_concepts}
+        # Build full lookup from vectors (not just top-20) so no concept shows 0 incorrectly
+        name_to_idx = {(concept_names[i] if concept_names else f"c_{i}"): i for i in range(len(cv_orig))}
+        orig_vals_bar = [float(cv_orig[name_to_idx[n]]) if n in name_to_idx else 0 for n in all_names]
+        smooth_vals_bar = [float(cv_smoothed_avg[name_to_idx[n]]) if n in name_to_idx else 0 for n in all_names]
         y_pos = np.arange(len(all_names))
-        ax.barh(y_pos - 0.2, [orig_dict.get(n, 0) for n in all_names], height=0.35, color='steelblue', label='Original', alpha=0.8)
-        ax.barh(y_pos + 0.2, [final_dict.get(n, 0) for n in all_names], height=0.35, color='coral', label='Manifold avg', alpha=0.8)
+        ax.barh(y_pos - 0.2, orig_vals_bar, height=0.35, color='steelblue', label='Original', alpha=0.8)
+        ax.barh(y_pos + 0.2, smooth_vals_bar, height=0.35, color='coral', label='Manifold avg', alpha=0.8)
         ax.set_yticks(y_pos); ax.set_yticklabels([n[:22] for n in all_names], fontsize=8)
         ax.invert_yaxis(); ax.set_xlabel('Activation')
         ax.set_title(f'Top Activations: {get_class_name(PROBE_DATASET, pred_orig)} → '
@@ -881,7 +883,7 @@ for loop_i, target_idx in enumerate(TARGET_IDCS):
             'pred_smooth': pred_smooth,
             'pred_smooth_class': get_class_name(PROBE_DATASET, pred_smooth),
             'n_votes': n_votes,
-            'stable': pred_orig == pred_smooth,
+            'stable': bool(pred_orig == pred_smooth),
             'mean_overlap': round(float(np.mean(smooth_concepts_overlap)), 4),
             'mean_concept_survival': mean_concept_survival,
             'n_concepts_certified': n_concepts_certified,
@@ -954,11 +956,11 @@ for loop_i, target_idx in enumerate(TARGET_IDCS):
         for n, _ in gauss_top_concepts:
             if n not in all_names_g: all_names_g.append(n)
         all_names_g = all_names_g[:25]
-        orig_dict_g = {n: v for n, v in orig_top_concepts}
-        gauss_dict = {n: v for n, v in gauss_top_concepts}
+        orig_vals_bar_g = [float(cv_orig[name_to_idx[n]]) if n in name_to_idx else 0 for n in all_names_g]
+        smooth_vals_bar_g = [float(cv_gauss_avg[name_to_idx[n]]) if n in name_to_idx else 0 for n in all_names_g]
         y_pos_g = np.arange(len(all_names_g))
-        ax.barh(y_pos_g - 0.2, [orig_dict_g.get(n, 0) for n in all_names_g], height=0.35, color='steelblue', label='Original', alpha=0.8)
-        ax.barh(y_pos_g + 0.2, [gauss_dict.get(n, 0) for n in all_names_g], height=0.35, color='coral', label='Isotropic avg', alpha=0.8)
+        ax.barh(y_pos_g - 0.2, orig_vals_bar_g, height=0.35, color='steelblue', label='Original', alpha=0.8)
+        ax.barh(y_pos_g + 0.2, smooth_vals_bar_g, height=0.35, color='coral', label='Isotropic avg', alpha=0.8)
         ax.set_yticks(y_pos_g); ax.set_yticklabels([n[:22] for n in all_names_g], fontsize=8)
         ax.invert_yaxis(); ax.set_xlabel('Activation')
         ax.set_title(f'Top Activations: {get_class_name(PROBE_DATASET, pred_orig)} → '
@@ -1030,7 +1032,7 @@ for loop_i, target_idx in enumerate(TARGET_IDCS):
             'pred_smooth': pred_gauss,
             'pred_smooth_class': get_class_name(PROBE_DATASET, pred_gauss),
             'n_votes': n_votes_gauss,
-            'stable': pred_orig == pred_gauss,
+            'stable': bool(pred_orig == pred_gauss),
             'mean_overlap': round(float(np.mean(gauss_overlap)), 4),
             'mean_concept_survival': g_mean_concept_survival,
             'n_concepts_certified': g_n_concepts_certified,
@@ -1284,6 +1286,7 @@ for loop_i, target_idx in enumerate(TARGET_IDCS):
 
     result_row = {
         'idx': target_idx,
+        'img_path': str(img_path) if img_path else None,
         'label_true': label_true,
         'pred_orig': pred_orig,
         # === Concept-level certification (manifold) ===
