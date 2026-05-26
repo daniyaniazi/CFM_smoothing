@@ -27,7 +27,7 @@ from pathlib import Path
 from collections import Counter
 from sklearn.decomposition import PCA
 from dataclasses import dataclass
-from scipy.stats import norm, binom, pearsonr, kendalltau
+from scipy.stats import norm, binomtest, pearsonr, kendalltau
 from scipy.stats import beta as beta_dist
 from scipy.special import gammaln
 import matplotlib
@@ -52,9 +52,20 @@ PROBE_CONFIG = "lr0.0001_bs512_epo50_clCE_spL1_spl0.0max_no_threshold"
 # Smoothing parameters
 K_NEIGHBORS = 500
 SCALE_WEIGHT = float(os.environ.get('CFM_SIGMA', '0.7'))  # supports multi-sigma via env
+N0_SMOOTH_SAMPLES = int(os.environ.get('CFM_N0_SAMPLES', '100'))  # paper stage-1 class selection
 N_SMOOTH_SAMPLES = int(os.environ.get('CFM_N_SAMPLES', '100'))  # supports multi-N via env
 N_TARGETS = 500           # number of val images to certify
-N_VIZ = 10                # save detailed viz/JSON only for the first N images
+SAVE_VIZ = os.environ.get('CFM_SAVE_VIZ', '1').strip().lower() not in {'0', 'false', 'no'}
+N_VIZ = int(os.environ.get('CFM_N_VIZ', '10'))  # <0 means save viz for all targets
+_viz_sigmas_raw = os.environ.get('CFM_VIZ_SIGMAS', '').strip()
+if _viz_sigmas_raw:
+    try:
+        VIZ_SIGMAS = sorted({float(s) for s in _viz_sigmas_raw.replace(';', ',').split(',') if s.strip() and float(s) > 0.0})
+    except ValueError:
+        print(f"WARNING: Invalid CFM_VIZ_SIGMAS={_viz_sigmas_raw!r}; falling back to current sigma only.")
+        VIZ_SIGMAS = [SCALE_WEIGHT]
+else:
+    VIZ_SIGMAS = [SCALE_WEIGHT]
 
 DATA_DIR = os.path.join(os.path.dirname(__file__), '..', 'smoothing_data')  # shared artifacts (vectors, index)
 SAVE_DIR = os.path.join(DATA_DIR, f'sigma_{SCALE_WEIGHT:.2f}_n{N_SMOOTH_SAMPLES}')  # sigma+N specific results
@@ -66,7 +77,7 @@ os.makedirs(SAVE_DIR, exist_ok=True)
 # Helpers
 # ===========================================================================
 
-# --- Cohen et al. certification helpers ---
+# --- Paper-aligned certification helpers ---
 CERTIFY_ALPHA = 0.001  # confidence level for Clopper-Pearson bounds
 
 def clopper_pearson_lower(n_success, n_total, alpha=CERTIFY_ALPHA):
@@ -81,51 +92,109 @@ def clopper_pearson_upper(n_success, n_total, alpha=CERTIFY_ALPHA):
         return 1.0
     return float(beta_dist.ppf(1 - alpha, n_success + 1, n_total - n_success))
 
-def certified_radius(sigma, p_a_lower, p_b_upper):
-    """Cohen et al. certified L2 radius: r = σ/2 * (Φ⁻¹(p_A_lower) - Φ⁻¹(p_B_upper))"""
-    if p_a_lower <= p_b_upper or p_a_lower <= 0.5:
-        return 0.0  # abstain
-    # With proper Beta-based Clopper-Pearson, p_a_lower < 1 and p_b_upper > 0
-    # so Φ⁻¹ is always finite — no clamping needed.
-    return sigma / 2.0 * (norm.ppf(p_a_lower) - norm.ppf(p_b_upper))
+def binom_pvalue_two_sided(n_a, n_total, p=0.5):
+    """Two-sided binomial test p-value used by the paper PREDICT routine."""
+    if n_total <= 0:
+        return 1.0
+    return float(binomtest(k=int(n_a), n=int(n_total), p=float(p), alternative='two-sided').pvalue)
 
-def certify_class_votes(vote_counts, n_total, sigma):
-    """Certify a single class prediction from vote counts.
-    Returns dict with p_A_lower, p_B_upper, abstained, certified_radius, top_class, n_votes.
+def predict_from_counts_paper(class_counts, alpha_pred=CERTIFY_ALPHA, abstain_label=-1):
+    """Paper PREDICT routine based on top-2 counts and a two-sided binomial test."""
+    counts = np.asarray(class_counts, dtype=np.int64)
+    if counts.size == 0 or counts.sum() <= 0:
+        return abstain_label
+
+    top2 = np.argsort(counts)[-2:]
+    c_a = int(top2[-1])
+    c_b = int(top2[-2]) if len(top2) > 1 else c_a
+    n_a = int(counts[c_a])
+    n_b = int(counts[c_b])
+    p_val = binom_pvalue_two_sided(n_a, n_a + n_b, p=0.5)
+    return c_a if p_val <= float(alpha_pred) else abstain_label
+
+def certified_radius_paper(sigma, p_a_lower):
+    """Paper CERTIFY radius: R = σ * Φ⁻¹(p_A_lower), valid when p_A_lower > 0.5."""
+    if p_a_lower <= 0.5:
+        return 0.0
+    return float(sigma) * float(norm.ppf(p_a_lower))
+
+def certify_class_votes_two_stage(class_counts_n0, class_counts_n, sigma,
+                                  alpha_conf=CERTIFY_ALPHA,
+                                  alpha_pred=CERTIFY_ALPHA,
+                                  abstain_label=-1):
+    """Paper-exact two-stage CERTIFY routine with extra diagnostics for analysis.
+
+    Stage 1 (n0): choose candidate class from noisy samples.
+    Stage 2 (n): estimate a lower confidence bound for that class and certify only if p_A > 0.5.
     """
-    sorted_votes = vote_counts.most_common()
-    top_class, n_a = sorted_votes[0]
-    n_b = sorted_votes[1][1] if len(sorted_votes) > 1 else 0
+    counts_n0 = np.asarray(class_counts_n0, dtype=np.int64)
+    counts_n = np.asarray(class_counts_n, dtype=np.int64)
 
-    p_a_lower = clopper_pearson_lower(n_a, n_total)
-    p_b_upper = clopper_pearson_upper(n_b, n_total)
-    abstained = bool(p_a_lower <= p_b_upper)
-    radius = certified_radius(sigma, p_a_lower, p_b_upper)
+    if counts_n0.size == 0 or counts_n.size == 0 or counts_n.sum() <= 0:
+        return {
+            'top_class': abstain_label,
+            'top_class_stage2': abstain_label,
+            'n0_votes': 0,
+            'n0_votes_runner_up': 0,
+            'n_votes': 0,
+            'n_votes_runner_up': 0,
+            'p_a_lower': 0.0,
+            'p_b_upper': 1.0,
+            'predict_p_value': 1.0,
+            'predict_abstained': True,
+            'abstained': True,
+            'certified_radius': 0.0,
+        }
+
+    top2_n0 = np.argsort(counts_n0)[-2:]
+    c_a = int(top2_n0[-1])
+    c_b_n0 = int(top2_n0[-2]) if len(top2_n0) > 1 else c_a
+    n0_a = int(counts_n0[c_a])
+    n0_b = int(counts_n0[c_b_n0])
+    predict_p_value = binom_pvalue_two_sided(n0_a, n0_a + n0_b, p=0.5)
+    predict_abstained = bool(predict_p_value > float(alpha_pred))
+
+    total_n = int(counts_n.sum())
+    n_a = int(counts_n[c_a])
+    top2_n = np.argsort(counts_n)[-2:]
+    c_top_n = int(top2_n[-1])
+    c_b_n = int(top2_n[-2]) if len(top2_n) > 1 else c_top_n
+    n_b = int(counts_n[c_b_n])
+
+    p_a_lower = clopper_pearson_lower(n_a, total_n, alpha_conf)
+    p_b_upper = 1.0 - p_a_lower
+    abstained = bool(not (p_a_lower > 0.5))
+    radius = 0.0 if abstained else certified_radius_paper(sigma, p_a_lower)
+    pred = abstain_label if abstained else c_a
 
     return {
-        'top_class': top_class,
+        'top_class': pred,
+        'candidate_class': c_a,
+        'top_class_stage2': c_top_n,
+        'n0_votes': n0_a,
+        'n0_votes_runner_up': n0_b,
         'n_votes': n_a,
         'n_votes_runner_up': n_b,
         'p_a_lower': round(p_a_lower, 6),
         'p_b_upper': round(p_b_upper, 6),
+        'predict_p_value': round(predict_p_value, 6),
+        'predict_abstained': predict_abstained,
+        'predict_label': predict_from_counts_paper(counts_n0, alpha_pred=alpha_pred, abstain_label=abstain_label),
         'abstained': abstained,
         'certified_radius': round(radius, 6),
     }
 
 def certify_concept(n_survived, n_total, sigma):
-    """Certify a single concept's presence in top-K.
-    Treats concept-in-top-K as a binary classification: 'present' vs 'absent'.
-    Returns dict with survival_rate, p_a_lower, certified, radius.
-    """
-    n_absent = n_total - n_survived
+    """Certify a single concept's presence in top-K using the paper's p_A-only radius."""
     p_a_lower = clopper_pearson_lower(n_survived, n_total)
-    p_b_upper = clopper_pearson_upper(n_absent, n_total)
-    is_certified = bool((p_a_lower > 0.5) and (not (p_a_lower <= p_b_upper)))
-    radius = certified_radius(sigma, p_a_lower, p_b_upper)
+    p_b_upper = 1.0 - p_a_lower
+    is_certified = bool(p_a_lower > 0.5)
+    radius = certified_radius_paper(sigma, p_a_lower)
 
     return {
         'survival_rate': round(n_survived / n_total, 4),
         'p_a_lower': round(p_a_lower, 6),
+        'p_b_upper': round(p_b_upper, 6),
         'certified': is_certified,
         'certified_radius': round(radius, 6),
     }
@@ -216,6 +285,11 @@ def log_volume_manifold(radius: float, eigenvalues: np.ndarray) -> float:
     return log_ball + log_det_half
 
 
+def log_volume_manifold_from_iso_radius(radius_iso: float, eigenvalues: np.ndarray) -> float:
+    """Predicted manifold volume with the isotropic radius and raw eigenvalue geometry."""
+    return log_volume_manifold(radius_iso, eigenvalues)
+
+
 def log_volume_ratio(radius_mani: float, radius_iso: float,
                      eigenvalues: np.ndarray) -> float:
     """log(V_mani / V_iso) = k·log(r_mani/r_iso) + 0.5·Σlog(λ_i).
@@ -275,7 +349,60 @@ def eigenvalue_diagnostics(eigenvalues: np.ndarray) -> EigenDiagnostics:
     )
 
 
-def compute_volumes(r_iso: float, r_mani: float, eigenvalues: np.ndarray, D: int) -> dict:
+def normalize_eigenvalues(eigenvalues: np.ndarray, mode: str = 'max') -> np.ndarray:
+    """Normalize eigenvalues so geometry metrics reflect shape rather than absolute scale."""
+    evals = np.asarray(eigenvalues, dtype=np.float64)
+    evals = np.maximum(evals, 1e-30)
+    if mode == 'max':
+        return evals / evals.max()
+    if mode == 'mean':
+        return evals / evals.mean()
+    raise ValueError(f"Unknown normalization mode: {mode!r}. Use 'max' or 'mean'.")
+
+
+def log_volume_geo_iso(sigma: float, k: int) -> float:
+    """Geometry-first isotropic k-ball volume at the same sigma."""
+    return log_volume_isotropic(sigma, k)
+
+
+def log_volume_geo_mani(sigma: float, eigenvalues_norm: np.ndarray) -> float:
+    """Geometry-first manifold ellipsoid volume using normalized eigenvalues."""
+    evals_norm = np.asarray(eigenvalues_norm, dtype=np.float64)
+    k = len(evals_norm)
+    if sigma <= 0.0 or k <= 0:
+        return -np.inf
+    log_det_half_norm = 0.5 * np.sum(np.log(np.maximum(evals_norm, 1e-30)))
+    return log_volume_geo_iso(sigma, k) + log_det_half_norm
+
+
+def axis_lengths(sigma: float, eigenvalues_norm: np.ndarray) -> np.ndarray:
+    """Axis lengths a_i = σ * sqrt(λ̃_i) in the local PCA plane."""
+    return sigma * np.sqrt(np.maximum(np.asarray(eigenvalues_norm, dtype=np.float64), 0.0))
+
+
+def anisotropy_ratio(eigenvalues_norm: np.ndarray) -> float:
+    """Largest-to-smallest axis ratio of the normalized manifold ellipsoid."""
+    evals = np.asarray(eigenvalues_norm, dtype=np.float64)
+    evals = np.maximum(evals, 1e-30)
+    return float(np.sqrt(evals.max() / evals.min()))
+
+
+def cumulative_stretch_energy(eigenvalues_norm: np.ndarray, m: int | None = None) -> np.ndarray:
+    """Cumulative energy carried by the leading normalized eigenvalues."""
+    evals = np.asarray(eigenvalues_norm, dtype=np.float64)
+    evals = np.maximum(evals, 0.0)
+    total = evals.sum()
+    if total <= 0:
+        n = len(evals) if m is None else min(m, len(evals))
+        return np.zeros(n, dtype=np.float64)
+    cumsum = np.cumsum(evals)
+    if m is not None:
+        cumsum = cumsum[:m]
+    return cumsum / total
+
+
+def compute_volumes(r_iso: float, r_mani: float, eigenvalues: np.ndarray, D: int,
+                    sigma: float, normalize_mode: str = 'max') -> dict:
     """Compute certified volume quantities (log-space) per Jonas's framework.
 
     Qty 1: Ambient Iso Ball         = C_D · r_iso^D
@@ -288,10 +415,15 @@ def compute_volumes(r_iso: float, r_mani: float, eigenvalues: np.ndarray, D: int
 
     log_qty1 = log_volume_isotropic(r_iso, D)
     log_qty2 = log_volume_isotropic(r_iso, k)
-    log_qty3 = log_volume_manifold(r_iso, evals)   # geometry-only (iso radius)
-    log_qty4 = log_volume_manifold(r_mani, evals)   # full manifold
+    log_qty3 = log_volume_manifold_from_iso_radius(r_iso, evals)
+    log_qty4 = log_volume_manifold(r_mani, evals)
 
     diag = eigenvalue_diagnostics(evals)
+    evals_norm = normalize_eigenvalues(evals, mode=normalize_mode) if k > 0 else np.asarray([], dtype=np.float64)
+    geo_iso = log_volume_geo_iso(sigma, k) if k > 0 else -np.inf
+    geo_mani = log_volume_geo_mani(sigma, evals_norm) if k > 0 else -np.inf
+    axes = axis_lengths(sigma, evals_norm) if k > 0 else np.asarray([], dtype=np.float64)
+    cum_energy = cumulative_stretch_energy(evals_norm) if k > 0 else np.asarray([], dtype=np.float64)
 
     return {
         'log_vol_iso_D': round(float(log_qty1), 4),       # Qty 1
@@ -299,10 +431,19 @@ def compute_volumes(r_iso: float, r_mani: float, eigenvalues: np.ndarray, D: int
         'log_vol_mani_pred': round(float(log_qty3), 4),   # Qty 3
         'log_vol_mani_actual': round(float(log_qty4), 4), # Qty 4
         'log_vol_ratio': round(float(log_volume_ratio(r_mani, r_iso, evals)), 4),
+        'log_vol_geo_iso_k': round(float(geo_iso), 4) if np.isfinite(geo_iso) else float('-inf'),
+        'log_vol_geo_mani': round(float(geo_mani), 4) if np.isfinite(geo_mani) else float('-inf'),
+        'log_geo_ratio': round(float(geo_mani - geo_iso), 4) if np.isfinite(geo_mani) and np.isfinite(geo_iso) else float('-inf'),
         'r_iso': round(float(r_iso), 6),
         'r_mani': round(float(r_mani), 6),
+        'sigma': round(float(sigma), 6),
         'k': k,
         'D': D,
+        'normalize_mode': normalize_mode,
+        'eigenvalues_norm': [round(float(v), 6) for v in evals_norm.tolist()],
+        'axis_lengths': [round(float(v), 6) for v in axes.tolist()],
+        'anisotropy_ratio': round(float(anisotropy_ratio(evals_norm)), 6) if k > 0 else 0.0,
+        'cumulative_stretch_energy': [round(float(v), 6) for v in cum_energy.tolist()],
         **diag.to_dict(),
     }
 
@@ -313,6 +454,8 @@ def classify_concept_vector(cv, classifier_weights):
 
 
 def get_class_name(probe_dataset, class_idx):
+    if class_idx is None or int(class_idx) < 0:
+        return "ABSTAIN"
     names = probe_classnames.probe_classes_dict[probe_dataset]
     if probe_dataset == "places365":
         return " ".join(names[class_idx].split("/")[2:]).replace("_", " ")
@@ -468,6 +611,7 @@ import glob
 
 N_TRAIN = train_concept_vectors.shape[0]
 CONCEPT_DIM = train_concept_vectors.shape[1]
+N_CLASSES = int(classifier_weights.shape[0])
 
 index_pattern = os.path.join(DATA_DIR, f"knn_concepts_{PROBE_DATASET}_train_*.ann")
 available_indices = sorted(glob.glob(index_pattern), key=os.path.getsize, reverse=True)
@@ -503,8 +647,10 @@ print(f"Loaded KNN index from {index_path}", flush=True)
 print("\n" + "=" * 70, flush=True)
 print("Manifold smoothing", flush=True)
 print("=" * 70, flush=True)
-print(f"K={K_NEIGHBORS}, sigma={SCALE_WEIGHT}, N_samples={N_SMOOTH_SAMPLES}", flush=True)
+print(f"K={K_NEIGHBORS}, sigma={SCALE_WEIGHT}, n0={N0_SMOOTH_SAMPLES}, n={N_SMOOTH_SAMPLES}", flush=True)
 print(f"Index: TRAIN ({N_TRAIN} vectors), Targets: VAL", flush=True)
+_viz_limit_label = 'all' if N_VIZ < 0 else str(N_VIZ)
+print(f"Visualization: enabled={SAVE_VIZ}, limit={_viz_limit_label}, sigmas={VIZ_SIGMAS}", flush=True)
 
 # --- Incremental saving: write each result as a JSONL line so nothing is lost on OOM ---
 results_jsonl_path = os.path.join(SAVE_DIR, f"smoothing_results_{PROBE_DATASET}.jsonl")
@@ -548,7 +694,11 @@ os.makedirs(isotropic_dir, exist_ok=True)
 
 np.random.seed(42)
 TARGET_IDCS = np.random.choice(len(val_concept_vectors), size=N_TARGETS, replace=False).tolist()
-print(f"Certifying {N_TARGETS} val images (saving viz for first {N_VIZ})", flush=True)
+if SAVE_VIZ:
+    _viz_text = 'all targets' if N_VIZ < 0 else f'first {N_VIZ}'
+else:
+    _viz_text = 'disabled'
+print(f"Certifying {N_TARGETS} val images (viz: {_viz_text})", flush=True)
 viz_count = 0
 
 for loop_i, target_idx in enumerate(TARGET_IDCS):
@@ -596,8 +746,20 @@ for loop_i, target_idx in enumerate(TARGET_IDCS):
     # Whiten original
     cv_whitened = (cv_orig) @ Vt.T / np.sqrt(ev)
 
-    # Smoothing loop — collect per-concept survival + downstream class votes
+    # Stage 1 (n0) — choose the class to certify, paper-style
+    class_counts_n0 = np.zeros(N_CLASSES, dtype=np.int64)
+    for _ in range(N0_SMOOTH_SAMPLES):
+        noise = np.random.normal(0, SCALE_WEIGHT, size=len(ev))
+        cv_noised = cv_whitened + noise
+        cv_stage0 = cv_noised @ (np.sqrt(ev)[:, None] * Vt) + mean_nn
+        pred_stage0 = classify_concept_vector(
+            torch.tensor(cv_stage0, dtype=torch.float32, device=args.device),
+            classifier_weights)
+        class_counts_n0[pred_stage0] += 1
+
+    # Stage 2 (n) — collect concept stats + class counts for certification
     smooth_preds = []
+    class_counts_n = np.zeros(N_CLASSES, dtype=np.int64)
     smooth_concepts_overlap = []
     example_noisy_samples = []
     orig_top_k = 20
@@ -610,7 +772,7 @@ for loop_i, target_idx in enumerate(TARGET_IDCS):
     # Track activation values of original top-K concepts across all smooth samples (for distribution plot)
     manifold_activation_traces = {int(idx): [] for idx in orig_top_idxs}
     # Also store ALL smoothed vectors for viz (to analyze least-activated/new concepts)
-    save_viz = (viz_count < N_VIZ)
+    save_viz = SAVE_VIZ and (N_VIZ < 0 or viz_count < N_VIZ)
     all_manifold_smooth_vecs = [] if save_viz else None
 
     for sample_i in range(N_SMOOTH_SAMPLES):
@@ -629,6 +791,7 @@ for loop_i, target_idx in enumerate(TARGET_IDCS):
             torch.tensor(cv_smoothed, dtype=torch.float32, device=args.device),
             classifier_weights)
         smooth_preds.append(pred_i)
+        class_counts_n[pred_i] += 1
 
         # Concept-level: which of the original top-K survived?
         smoothed_top_idxs = np.argsort(-cv_smoothed)[:orig_top_k]
@@ -671,9 +834,14 @@ for loop_i, target_idx in enumerate(TARGET_IDCS):
     min_concept_radius = round(min(concept_radii), 6) if concept_radii else 0.0
     mean_concept_radius = round(float(np.mean(concept_radii)), 6) if concept_radii else 0.0
 
-    # Downstream class certification (Cohen et al.)
-    vote_counts = Counter(smooth_preds)
-    class_cert = certify_class_votes(vote_counts, N_SMOOTH_SAMPLES, SCALE_WEIGHT)
+    # Downstream class certification (paper-aligned two-stage certify)
+    class_cert = certify_class_votes_two_stage(
+        class_counts_n0,
+        class_counts_n,
+        SCALE_WEIGHT,
+        alpha_conf=CERTIFY_ALPHA,
+        alpha_pred=CERTIFY_ALPHA,
+    )
     pred_smooth = class_cert['top_class']
     n_votes = class_cert['n_votes']
 
@@ -689,7 +857,17 @@ for loop_i, target_idx in enumerate(TARGET_IDCS):
 
     # --- Baseline: Isotropic Gaussian smoothing (no manifold) ---
     gauss_sigma = SCALE_WEIGHT  # same sigma as manifold for fair comparison
+    gauss_counts_n0 = np.zeros(N_CLASSES, dtype=np.int64)
+    for _ in range(N0_SMOOTH_SAMPLES):
+        noise = np.random.normal(0, gauss_sigma, size=cv_orig.shape)
+        cv_gauss_n0 = cv_orig + noise
+        pred_g0 = classify_concept_vector(
+            torch.tensor(cv_gauss_n0, dtype=torch.float32, device=args.device),
+            classifier_weights)
+        gauss_counts_n0[pred_g0] += 1
+
     gauss_preds = []
+    gauss_counts_n = np.zeros(N_CLASSES, dtype=np.int64)
     gauss_overlap = []
     gauss_example_samples = []
     gauss_concept_survival_counts = {int(idx): 0 for idx in orig_top_idxs}
@@ -709,6 +887,7 @@ for loop_i, target_idx in enumerate(TARGET_IDCS):
             torch.tensor(cv_gauss, dtype=torch.float32, device=args.device),
             classifier_weights)
         gauss_preds.append(pred_g)
+        gauss_counts_n[pred_g] += 1
         gauss_top_idxs_arr = np.argsort(-cv_gauss)[:orig_top_k]
         gauss_top = set(gauss_top_idxs_arr.tolist())
         g_overlap = len(orig_top & gauss_top) / orig_top_k
@@ -745,8 +924,13 @@ for loop_i, target_idx in enumerate(TARGET_IDCS):
     g_min_concept_radius = round(min(g_concept_radii), 6) if g_concept_radii else 0.0
     g_mean_concept_radius = round(float(np.mean(g_concept_radii)), 6) if g_concept_radii else 0.0
 
-    gauss_vote_counts = Counter(gauss_preds)
-    gauss_class_cert = certify_class_votes(gauss_vote_counts, N_SMOOTH_SAMPLES, gauss_sigma)
+    gauss_class_cert = certify_class_votes_two_stage(
+        gauss_counts_n0,
+        gauss_counts_n,
+        gauss_sigma,
+        alpha_conf=CERTIFY_ALPHA,
+        alpha_pred=CERTIFY_ALPHA,
+    )
     pred_gauss = gauss_class_cert['top_class']
     n_votes_gauss = gauss_class_cert['n_votes']
 
@@ -765,6 +949,8 @@ for loop_i, target_idx in enumerate(TARGET_IDCS):
           f"orig={get_class_name(PROBE_DATASET, pred_orig)}  "
           f"manifold={get_class_name(PROBE_DATASET, pred_smooth)}({n_votes}/{N_SMOOTH_SAMPLES})  "
           f"gauss={get_class_name(PROBE_DATASET, pred_gauss)}({n_votes_gauss}/{N_SMOOTH_SAMPLES})  "
+            f"\n    predict: m_n0={class_cert['n0_votes']}/{N0_SMOOTH_SAMPLES} p={class_cert['predict_p_value']:.4g}  "
+            f"g_n0={gauss_class_cert['n0_votes']}/{N0_SMOOTH_SAMPLES} p={gauss_class_cert['predict_p_value']:.4g}"
           f"\n    class: m_r={class_cert['certified_radius']:.4f}{'(ABSTAIN)' if class_cert['abstained'] else ''}  "
           f"g_r={gauss_class_cert['certified_radius']:.4f}{'(ABSTAIN)' if gauss_class_cert['abstained'] else ''}"
           f"\n    concepts: m_surv={mean_concept_survival:.2f} ({n_concepts_certified}/{orig_top_k} cert, "
@@ -837,6 +1023,113 @@ for loop_i, target_idx in enumerate(TARGET_IDCS):
             vis_noisy_preds.append(p)
         noisy_vis = pca_vis.transform(np.stack(vis_noisy_points))
         noisy_correct = [p == label_true for p in vis_noisy_preds]
+
+        # Circle + Ellipse geometry overlay (pipeline artifact)
+        ev_vis_norm = np.asarray(pca_vis.explained_variance_[:2], dtype=np.float64)
+        if ev_vis_norm.size < 2:
+            ev_vis_norm = np.asarray([1.0, 1.0], dtype=np.float64)
+        ev_vis_norm = np.maximum(ev_vis_norm, 1e-12)
+        ev_vis_norm = ev_vis_norm / ev_vis_norm.max()
+
+        def _save_circle_ellipse_overlay(neighbors_2d, anchor_2d, sample_points_2d,
+                                         evals_norm_2d, sigmas, method_label, save_path):
+            neighbors_2d = np.asarray(neighbors_2d, dtype=np.float64)
+            anchor_2d = np.asarray(anchor_2d, dtype=np.float64)
+            sample_points_2d = np.asarray(sample_points_2d, dtype=np.float64)
+
+            if neighbors_2d.shape[0] == 0:
+                return
+
+            pc1_std = float(np.std(neighbors_2d[:, 0]))
+            pc2_std = float(np.std(neighbors_2d[:, 1]))
+            pc1_range = float(np.max(neighbors_2d[:, 0]) - np.min(neighbors_2d[:, 0]))
+            max_sigma = float(max(sigmas)) if sigmas else float(SCALE_WEIGHT)
+            zoom_mid = 0.10 * pc1_range if pc1_range > 0 else max_sigma
+            zoom_tight = 3.0 * max_sigma
+
+            zoom_configs = [
+                (None, f"[A] Full cloud\nPC1 std={pc1_std:.3f}, max σ={max_sigma:.3f}"),
+                (zoom_mid, f"[B] Mid-zoom ±{zoom_mid:.3f}\nPC2 std={pc2_std:.3f}"),
+                (zoom_tight, f"[C] Tight zoom ±{zoom_tight:.3f}\nCircle/Ellipse focus"),
+            ]
+
+            sigma_colors = plt.cm.viridis(np.linspace(0.15, 0.95, len(sigmas))) if sigmas else ['#2196F3']
+            fig, axes = plt.subplots(1, 3, figsize=(18, 5.5), facecolor='white')
+
+            for ax, (zr, panel_title) in zip(axes, zoom_configs):
+                ax.scatter(neighbors_2d[:, 0], neighbors_2d[:, 1], c='#d0d0d0', s=6, alpha=0.28,
+                           linewidths=0, zorder=1, label='KNN neighbors')
+                if sample_points_2d.size > 0:
+                    ax.scatter(sample_points_2d[:, 0], sample_points_2d[:, 1], c='#4f8bc9', s=9,
+                               alpha=0.22, linewidths=0, zorder=2, label='Noisy samples')
+
+                for sigma_idx, sigma in enumerate(sigmas):
+                    color = sigma_colors[sigma_idx]
+                    axes_2d = axis_lengths(sigma, evals_norm_2d)
+                    ax.add_patch(plt.Circle(
+                        (float(anchor_2d[0]), float(anchor_2d[1])),
+                        float(sigma),
+                        fill=False,
+                        edgecolor=color,
+                        linewidth=1.8,
+                        linestyle=(0, (4, 2)),
+                        alpha=0.9,
+                        zorder=4,
+                    ))
+                    if len(axes_2d) >= 2:
+                        ax.add_patch(Ellipse(
+                            (float(anchor_2d[0]), float(anchor_2d[1])),
+                            width=float(2 * axes_2d[0]),
+                            height=float(2 * axes_2d[1]),
+                            fill=False,
+                            edgecolor=color,
+                            linewidth=1.8,
+                            linestyle='solid',
+                            alpha=0.9,
+                            zorder=4,
+                        ))
+
+                ax.scatter(float(anchor_2d[0]), float(anchor_2d[1]), c='#f5c518', s=170, marker='*',
+                           edgecolors='#444444', linewidths=0.8, zorder=6, label='Target')
+
+                if zr is not None:
+                    ax.set_xlim(float(anchor_2d[0]) - zr, float(anchor_2d[0]) + zr)
+                    ax.set_ylim(float(anchor_2d[1]) - zr, float(anchor_2d[1]) + zr)
+
+                ax.set_aspect('equal')
+                ax.set_title(panel_title, fontsize=9)
+                ax.set_xlabel('PC1')
+                ax.set_ylabel('PC2')
+                ax.grid(alpha=0.3)
+
+            legend_handles = [
+                plt.Line2D([0], [0], color='black', lw=1.8, linestyle=(0, (4, 2)), label='Iso circle'),
+                plt.Line2D([0], [0], color='black', lw=1.8, linestyle='solid', label='Manifold ellipse'),
+                plt.Line2D([0], [0], marker='*', color='w', markerfacecolor='#f5c518', markeredgecolor='#444',
+                           markersize=10, label='Target'),
+            ]
+            fig.legend(handles=legend_handles, loc='lower center', ncol=3, fontsize=8,
+                       frameon=True, framealpha=0.95, edgecolor='#cccccc', bbox_to_anchor=(0.5, -0.03))
+            fig.suptitle(
+                f"{method_label}: Circle + Ellipse Geometry (idx={target_idx})\n"
+                f"σ list={sigmas} | K={K_NEIGHBORS} | PC1 std={pc1_std:.3f}",
+                fontsize=11,
+                fontweight='bold',
+                y=1.03,
+            )
+            plt.tight_layout(rect=[0, 0.08, 1, 1])
+            plt.savefig(save_path, dpi=180, bbox_inches='tight')
+            plt.close(fig)
+
+        _save_circle_ellipse_overlay(
+            X_vis,
+            orig_vis,
+            noisy_vis,
+            ev_vis_norm,
+            VIZ_SIGMAS,
+            'Manifold',
+            os.path.join(manifold_dir, f"idx{target_idx}_circle_ellipse.png"),
+        )
 
         # Row 1, Panel 1: Manifold neighborhood
         ax = axes[0, 0]
@@ -958,7 +1251,12 @@ for loop_i, target_idx in enumerate(TARGET_IDCS):
             'mean_concept_survival': mean_concept_survival,
             'n_concepts_certified': n_concepts_certified,
             'concept_survival': concept_survival_named,
-            'params': {'K_NEIGHBORS': K_NEIGHBORS, 'SCALE_WEIGHT': SCALE_WEIGHT, 'N_SMOOTH_SAMPLES': N_SMOOTH_SAMPLES},
+            'params': {
+                'K_NEIGHBORS': K_NEIGHBORS,
+                'SCALE_WEIGHT': SCALE_WEIGHT,
+                'N0_SMOOTH_SAMPLES': N0_SMOOTH_SAMPLES,
+                'N_SMOOTH_SAMPLES': N_SMOOTH_SAMPLES,
+            },
             'original_concepts': [{'name': n, 'value': round(v, 4)} for n, v in orig_concepts],
             'top5_neighbors': top5_neighbors_info,
             'example_noisy_samples': example_noisy_samples,
@@ -986,6 +1284,16 @@ for loop_i, target_idx in enumerate(TARGET_IDCS):
             vis_gauss_preds_list.append(p)
         gauss_vis = pca_vis.transform(np.stack(vis_gauss_points))
         gauss_correct = [p == label_true for p in vis_gauss_preds_list]
+
+        _save_circle_ellipse_overlay(
+            X_vis,
+            orig_vis,
+            gauss_vis,
+            ev_vis_norm,
+            VIZ_SIGMAS,
+            'Isotropic Gaussian',
+            os.path.join(isotropic_dir, f"idx{target_idx}_circle_ellipse.png"),
+        )
 
         # Row 1, Panel 1: Neighborhood reference
         ax = axes[0, 0]
@@ -1097,7 +1405,11 @@ for loop_i, target_idx in enumerate(TARGET_IDCS):
             'mean_concept_survival': g_mean_concept_survival,
             'n_concepts_certified': g_n_concepts_certified,
             'concept_survival': gauss_concept_survival_named,
-            'params': {'GAUSS_SIGMA': round(float(gauss_sigma), 4), 'N_SMOOTH_SAMPLES': N_SMOOTH_SAMPLES},
+            'params': {
+                'GAUSS_SIGMA': round(float(gauss_sigma), 4),
+                'N0_SMOOTH_SAMPLES': N0_SMOOTH_SAMPLES,
+                'N_SMOOTH_SAMPLES': N_SMOOTH_SAMPLES,
+            },
             'original_concepts': [{'name': n, 'value': round(v, 4)} for n, v in orig_concepts],
             'example_noisy_samples': gauss_example_samples,
             'final_avg_concepts': [{'name': n, 'value': round(v, 4)} for n, v in gauss_final_concepts],
@@ -1336,19 +1648,21 @@ for loop_i, target_idx in enumerate(TARGET_IDCS):
     scores_manifold = compute_concept_scores(cv_orig, cv_smoothed_avg)
     scores_gaussian = compute_concept_scores(cv_orig, cv_gauss_avg)
 
-    # Volume framework (Jonas): r_iso from gaussian, r_mani from manifold
+    # Volume framework: certified radii + geometry-first sigma-based diagnostics
     r_iso = gauss_class_cert['certified_radius']
     r_mani = class_cert['certified_radius']
     # Filter eigenvalues to non-trivial components
     ev_positive = ev[ev > 1e-10]
     CONCEPT_DIM = len(cv_orig)
-    volumes = compute_volumes(r_iso, r_mani, ev_positive, D=CONCEPT_DIM)
+    volumes = compute_volumes(r_iso, r_mani, ev_positive, D=CONCEPT_DIM, sigma=SCALE_WEIGHT)
 
     result_row = {
         'idx': target_idx,
         'img_path': str(img_path) if img_path else None,
         'label_true': label_true,
         'pred_orig': pred_orig,
+        'n0_samples': N0_SMOOTH_SAMPLES,
+        'n_samples': N_SMOOTH_SAMPLES,
         # === Concept-level certification (manifold) ===
         'mean_concept_survival_manifold': mean_concept_survival,
         'n_concepts_certified_manifold': n_concepts_certified,
@@ -1358,6 +1672,7 @@ for loop_i, target_idx in enumerate(TARGET_IDCS):
         'overlap_manifold': round(float(np.mean(smooth_concepts_overlap)), 4),
         # === Downstream class certification (manifold) ===
         'pred_manifold': pred_smooth,
+        'pred_manifold_stage2': class_cert.get('top_class_stage2', pred_smooth),
         'class_cert_manifold': class_cert,
         'stable_manifold': pred_orig == pred_smooth and not class_cert['abstained'],
         # === Concept stability scores (manifold) ===
@@ -1371,6 +1686,7 @@ for loop_i, target_idx in enumerate(TARGET_IDCS):
         'overlap_gaussian': round(float(np.mean(gauss_overlap)), 4),
         # === Downstream class certification (gaussian) ===
         'pred_gaussian': pred_gauss,
+        'pred_gaussian_stage2': gauss_class_cert.get('top_class_stage2', pred_gauss),
         'class_cert_gaussian': gauss_class_cert,
         'stable_gaussian': pred_orig == pred_gauss and not gauss_class_cert['abstained'],
         # === Concept stability scores (gaussian) ===
@@ -1439,10 +1755,10 @@ print(f"{'Gaussian (σ={SCALE_WEIGHT})':<18s} {g_correct}/{n} ({g_correct/n*100:
       f"{g_preserves}/{n} ({g_preserves/n*100:.1f}%)")
 
 # ==========================================================================
-# TABLE 2: CERTIFIED DOWNSTREAM ACCURACY (Cohen et al.)
+# TABLE 2: CERTIFIED DOWNSTREAM ACCURACY (paper-aligned two-stage)
 # ==========================================================================
 print(f"\n{'='*80}")
-print(f"TABLE 2: CERTIFIED DOWNSTREAM ACCURACY (Cohen et al., α={CERTIFY_ALPHA})")
+print(f"TABLE 2: CERTIFIED DOWNSTREAM ACCURACY (paper-aligned two-stage, α={CERTIFY_ALPHA})")
 print(f"{'='*80}")
 
 def _class_stats(results, method):
@@ -1559,6 +1875,7 @@ r_isos = [r.get('volumes', {}).get('r_iso', 0) for r in results]
 r_manis = [r.get('volumes', {}).get('r_mani', 0) for r in results]
 
 print(f"\n  σ = {SCALE_WEIGHT}")
+print(f"  Sampling = n0={N0_SMOOTH_SAMPLES}, n={N_SMOOTH_SAMPLES}")
 print(f"  r_iso  (Gaussian cert radius): mean={_safe_mean(r_isos):.4f}, "
       f"median={_safe_median(r_isos):.4f}, >0: {sum(1 for r in r_isos if r > 0)}/{n}")
 print(f"  r_mani (Manifold cert radius): mean={_safe_mean(r_manis):.4f}, "
@@ -1580,6 +1897,44 @@ for vk, vl in zip(vol_keys, vol_labels):
 print(f"\nNote: Qty1-3 are -Inf when r_iso=0 (Gaussian abstained).")
 print(f"      Qty4 is -Inf when r_mani=0 (Manifold abstained).")
 print(f"      Means are computed over finite values only.")
+
+geo_iso_vals = [r.get('volumes', {}).get('log_vol_geo_iso_k', -np.inf) for r in results]
+geo_mani_vals = [r.get('volumes', {}).get('log_vol_geo_mani', -np.inf) for r in results]
+geo_ratio_vals = [r.get('volumes', {}).get('log_geo_ratio', -np.inf) for r in results]
+anisotropy_vals = [r.get('volumes', {}).get('anisotropy_ratio', 0.0) for r in results if r.get('volumes', {}).get('anisotropy_ratio', 0.0) > 0]
+effective_rank_vals = [r.get('volumes', {}).get('eigen_effective_rank', 0.0) for r in results if r.get('volumes', {}).get('eigen_effective_rank', 0.0) > 0]
+axis_length_rows = [r.get('volumes', {}).get('axis_lengths', []) for r in results if r.get('volumes', {}).get('axis_lengths')]
+
+print(f"\n{'='*80}")
+print("TABLE 6: GEOMETRY-FIRST MANIFOLD METRICS (σ-based, normalized eigenvalues)")
+print(f"{'='*80}")
+print("  λ̃_i = λ_i / λ_max")
+print("  V_iso,geo = C_k · σ^k")
+print("  V_mani,geo = C_k · σ^k · √det(Λ̃)")
+print("  a_i = σ · √λ̃_i")
+
+geo_iso_fin = _finite(geo_iso_vals)
+geo_mani_fin = _finite(geo_mani_vals)
+geo_ratio_fin = _finite(geo_ratio_vals)
+if geo_iso_fin:
+    print(f"  log V_iso,geo:   mean={np.mean(geo_iso_fin):.2f}, median={np.median(geo_iso_fin):.2f}")
+if geo_mani_fin:
+    print(f"  log V_mani,geo:  mean={np.mean(geo_mani_fin):.2f}, median={np.median(geo_mani_fin):.2f}")
+if geo_ratio_fin:
+    print(f"  log geo ratio:   mean={np.mean(geo_ratio_fin):.2f}, median={np.median(geo_ratio_fin):.2f}")
+if anisotropy_vals:
+    print(f"  anisotropy:      mean={np.mean(anisotropy_vals):.2f}, median={np.median(anisotropy_vals):.2f}")
+if effective_rank_vals:
+    print(f"  effective rank:  mean={np.mean(effective_rank_vals):.2f}, median={np.median(effective_rank_vals):.2f}")
+if axis_length_rows:
+    max_len = max(len(row) for row in axis_length_rows)
+    axis_mat = np.full((len(axis_length_rows), max_len), np.nan, dtype=np.float64)
+    for row_idx, row in enumerate(axis_length_rows):
+        axis_mat[row_idx, :len(row)] = row
+    mean_axis = np.nanmean(axis_mat, axis=0)
+    shown = min(5, len(mean_axis))
+    show_axes = ", ".join(f"a{i+1}={mean_axis[i]:.4f}" for i in range(shown))
+    print(f"  mean axis lengths (first {shown}): {show_axes}")
 
 # Write final JSON summaries
 results_path = os.path.join(SAVE_DIR, f"smoothing_results_{PROBE_DATASET}.json")
