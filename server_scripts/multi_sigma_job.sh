@@ -7,7 +7,7 @@
 #SBATCH -o /BS/dniazi_thesis/work/CFM_smoothing/output/slurm/smoothing_sigma-%a-%j.out
 #SBATCH -e /BS/dniazi_thesis/work/CFM_smoothing/output/slurm/smoothing_sigma-%a-%j.err
 #SBATCH -J cfm-multi-sigma
-#SBATCH --array=0-4
+#SBATCH --array=0-19
 
 set -euo pipefail
 
@@ -21,8 +21,8 @@ if [ -f "/BS/dniazi_thesis/work/miniforge3_new/etc/profile.d/conda.sh" ]; then
     conda activate cfm-env
 fi
 
-# Map SLURM_ARRAY_TASK_ID to sigma values
-SIGMAS=(0.25 0.50 0.70 0.75 1.00)
+# Map SLURM_ARRAY_TASK_ID to sigma values (20 values from 0.01 to 0.25)
+SIGMAS=(0.010 0.023 0.035 0.048 0.061 0.073 0.086 0.099 0.111 0.124 0.136 0.149 0.162 0.174 0.187 0.200 0.212 0.225 0.237 0.250)
 export CFM_SIGMA=${SIGMAS[$SLURM_ARRAY_TASK_ID]}
 export CFM_N_SAMPLES=100
 
