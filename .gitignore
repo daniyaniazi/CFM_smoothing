@@ -5,4 +5,5 @@ __pycache__/
 output/
 venv/
 smoothing_data/
+**/*.pt
 
