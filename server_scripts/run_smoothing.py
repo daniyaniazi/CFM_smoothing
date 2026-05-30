@@ -743,13 +743,21 @@ for loop_i, target_idx in enumerate(TARGET_IDCS):
     ev = pca.explained_variance_
     Vt = pca.components_
 
-    # Whiten original
-    cv_whitened = (cv_orig) @ Vt.T / np.sqrt(ev)
+    # Whiten original (subtract local mean before projecting — supervisor change)
+    cv_whitened = (cv_orig - mean_nn) @ Vt.T / np.sqrt(ev)
+
+    # Noise scale: alpha = sigma / sqrt(lambda_max)  (supervisor change)
+    # In whitened space we add N(0, alpha^2 I); this maps to pixel-space std
+    # sigma * sqrt(ev_norm_i) along each PC — ellipse matches the circle at PC1.
+    lambda_max = float(ev[0])
+    sqrt_lambda_max = float(np.sqrt(max(lambda_max, 1e-12)))
+    alpha = SCALE_WEIGHT / sqrt_lambda_max
+    print(f"  [PCA] λ_max={lambda_max:.6f}  √λ_max={sqrt_lambda_max:.6f}  α=σ/√λ_max={alpha:.6f}  (σ={SCALE_WEIGHT})", flush=True)
 
     # Stage 1 (n0) — choose the class to certify, paper-style
     class_counts_n0 = np.zeros(N_CLASSES, dtype=np.int64)
     for _ in range(N0_SMOOTH_SAMPLES):
-        noise = np.random.normal(0, SCALE_WEIGHT, size=len(ev))
+        noise = np.random.normal(0, alpha, size=len(ev))
         cv_noised = cv_whitened + noise
         cv_stage0 = cv_noised @ (np.sqrt(ev)[:, None] * Vt) + mean_nn
         pred_stage0 = classify_concept_vector(
@@ -776,7 +784,7 @@ for loop_i, target_idx in enumerate(TARGET_IDCS):
     all_manifold_smooth_vecs = [] if save_viz else None
 
     for sample_i in range(N_SMOOTH_SAMPLES):
-        noise = np.random.normal(0, SCALE_WEIGHT, size=len(ev))
+        noise = np.random.normal(0, alpha, size=len(ev))
         cv_noised = cv_whitened + noise
         cv_smoothed = cv_noised @ (np.sqrt(ev)[:, None] * Vt) + mean_nn
 
@@ -849,7 +857,7 @@ for loop_i, target_idx in enumerate(TARGET_IDCS):
     # Re-run to get the mean smoothed vector for final concept summary
     cv_smoothed_accum = np.zeros_like(cv_orig)
     for _ in range(N_SMOOTH_SAMPLES):
-        noise = np.random.normal(0, SCALE_WEIGHT, size=len(ev))
+        noise = np.random.normal(0, alpha, size=len(ev))
         cv_noised = cv_whitened + noise
         cv_smoothed_accum += cv_noised @ (np.sqrt(ev)[:, None] * Vt) + mean_nn
     cv_smoothed_avg = cv_smoothed_accum / N_SMOOTH_SAMPLES
@@ -1013,7 +1021,7 @@ for loop_i, target_idx in enumerate(TARGET_IDCS):
         vis_noisy_points = []
         vis_noisy_preds = []
         for _ in range(N_SMOOTH_SAMPLES):
-            noise = np.random.normal(0, SCALE_WEIGHT, size=len(ev))
+            noise = np.random.normal(0, alpha, size=len(ev))
             cv_noised = cv_whitened + noise
             cv_s = cv_noised @ (np.sqrt(ev)[:, None] * Vt) + mean_nn
             vis_noisy_points.append(cv_s)
@@ -1032,7 +1040,20 @@ for loop_i, target_idx in enumerate(TARGET_IDCS):
         ev_vis_norm = ev_vis_norm / ev_vis_norm.max()
 
         def _save_circle_ellipse_overlay(neighbors_2d, anchor_2d, sample_points_2d,
-                                         evals_norm_2d, sigmas, method_label, save_path):
+                                         evals_norm_2d, sigmas, method_label, save_path,
+                                         evals_full_norm=None):
+            """4-panel circle+ellipse geometry figure (panels A–D, matching notebook).
+
+            Panel A: full neighbor cloud (circle may be a tiny dot — expected).
+            Panel B: mid-zoom = ±10% of PC1 cloud range.
+            Panel C: tight zoom = ±σ  (circle exactly fills frame, ellipse inside).
+            Panel D: max-squash zoom = ±σ  (ellipse height = last-PC axis length).
+
+            Args:
+                evals_full_norm: normalized eigenvalues from the full K-dim PCA
+                    (ev / ev[0]).  Used for panel D to show the most-squashed axis.
+                    Falls back to evals_norm_2d[-1] if None.
+            """
             neighbors_2d = np.asarray(neighbors_2d, dtype=np.float64)
             anchor_2d = np.asarray(anchor_2d, dtype=np.float64)
             sample_points_2d = np.asarray(sample_points_2d, dtype=np.float64)
@@ -1045,18 +1066,33 @@ for loop_i, target_idx in enumerate(TARGET_IDCS):
             pc1_range = float(np.max(neighbors_2d[:, 0]) - np.min(neighbors_2d[:, 0]))
             max_sigma = float(max(sigmas)) if sigmas else float(SCALE_WEIGHT)
             zoom_mid = 0.10 * pc1_range if pc1_range > 0 else max_sigma
-            zoom_tight = 3.0 * max_sigma
+            zoom_tight = max_sigma  # ±σ — circle exactly fills frame
 
+            # Mid and last axis semi-lengths for panels D and E
+            if evals_full_norm is not None and len(evals_full_norm) > 0:
+                mid_idx = len(evals_full_norm) // 2
+                ev_mid_norm  = float(evals_full_norm[mid_idx])
+                ev_last_norm = float(evals_full_norm[-1])
+            else:
+                mid_idx = 0
+                ev_mid_norm  = float(evals_norm_2d[-1]) if len(evals_norm_2d) > 1 else 1.0
+                ev_last_norm = ev_mid_norm
+            a_mid  = max_sigma * float(np.sqrt(max(ev_mid_norm,  0.0)))
+            a_last = max_sigma * float(np.sqrt(max(ev_last_norm, 0.0)))
+
+            # Panel titles (note: a1 = sigma since evals_norm[0] = 1)
             zoom_configs = [
-                (None, f"[A] Full cloud\nPC1 std={pc1_std:.3f}, max σ={max_sigma:.3f}"),
-                (zoom_mid, f"[B] Mid-zoom ±{zoom_mid:.3f}\nPC2 std={pc2_std:.3f}"),
-                (zoom_tight, f"[C] Tight zoom ±{zoom_tight:.3f}\nCircle/Ellipse focus"),
+                (None,       f"[A] Full cloud\nPC1 std={pc1_std:.3f}  σ/std={max_sigma/(pc1_std+1e-12):.4f}"),
+                (zoom_mid,   f"[B] Mid-zoom ±{zoom_mid:.3f}\n(10% of cloud)  PC2 std={pc2_std:.3f}"),
+                (zoom_tight, f"[C] Tight zoom ±σ={zoom_tight:.4f}\nCircle fills frame, ellipse (a2) inside"),
+                (zoom_tight, f"[D] Mid PC (k={mid_idx})  a_mid={a_mid:.4f}\na_mid/a1={a_mid/(max_sigma+1e-12):.4f}"),
+                (zoom_tight, f"[E] Last PC (k={len(evals_full_norm)-1 if evals_full_norm is not None else '?'})  a_last={a_last:.6f}\na_last/a1={a_last/(max_sigma+1e-12):.6f}"),
             ]
 
             sigma_colors = plt.cm.viridis(np.linspace(0.15, 0.95, len(sigmas))) if sigmas else ['#2196F3']
-            fig, axes = plt.subplots(1, 3, figsize=(18, 5.5), facecolor='white')
+            fig, axes = plt.subplots(1, 5, figsize=(27, 5.5), facecolor='white')
 
-            for ax, (zr, panel_title) in zip(axes, zoom_configs):
+            for panel_idx, (ax, (zr, panel_title)) in enumerate(zip(axes, zoom_configs)):
                 ax.scatter(neighbors_2d[:, 0], neighbors_2d[:, 1], c='#d0d0d0', s=6, alpha=0.28,
                            linewidths=0, zorder=1, label='KNN neighbors')
                 if sample_points_2d.size > 0:
@@ -1065,7 +1101,9 @@ for loop_i, target_idx in enumerate(TARGET_IDCS):
 
                 for sigma_idx, sigma in enumerate(sigmas):
                     color = sigma_colors[sigma_idx]
+                    # a_i = sigma * sqrt(ev_norm_i)  →  a1 = sigma (circle = ellipse PC1 axis)
                     axes_2d = axis_lengths(sigma, evals_norm_2d)
+                    # Iso circle radius = sigma
                     ax.add_patch(plt.Circle(
                         (float(anchor_2d[0]), float(anchor_2d[1])),
                         float(sigma),
@@ -1075,44 +1113,66 @@ for loop_i, target_idx in enumerate(TARGET_IDCS):
                         linestyle=(0, (4, 2)),
                         alpha=0.9,
                         zorder=4,
+                        label=f'Iso circle r=σ={sigma:.3f}' if sigma_idx == 0 else None,
                     ))
                     if len(axes_2d) >= 2:
+                        # Panel D: mid PC axis;  Panel E: last PC axis
+                        if panel_idx == 3:
+                            ell_height = float(2 * a_mid)
+                            ell_label = f'Mani ellipse a1={axes_2d[0]:.4f} a_mid={a_mid:.4f}'
+                        elif panel_idx == 4:
+                            ell_height = float(2 * a_last)
+                            ell_label = f'Mani ellipse a1={axes_2d[0]:.4f} a_last={a_last:.4f}'
+                        else:
+                            ell_height = float(2 * axes_2d[1])
+                            ell_label = f'Mani ellipse a1={axes_2d[0]:.4f} a2={axes_2d[1]:.4f}'
                         ax.add_patch(Ellipse(
                             (float(anchor_2d[0]), float(anchor_2d[1])),
                             width=float(2 * axes_2d[0]),
-                            height=float(2 * axes_2d[1]),
+                            height=ell_height,
                             fill=False,
                             edgecolor=color,
                             linewidth=1.8,
                             linestyle='solid',
                             alpha=0.9,
                             zorder=4,
+                            label=ell_label if sigma_idx == 0 else None,
                         ))
 
                 ax.scatter(float(anchor_2d[0]), float(anchor_2d[1]), c='#f5c518', s=170, marker='*',
-                           edgecolors='#444444', linewidths=0.8, zorder=6, label='Target')
+                           edgecolors='#444444', linewidths=0.8, zorder=6, label='Anchor')
 
-                if zr is not None:
+                if zr is None:
+                    # Panel A: show full cloud
+                    x_all = np.concatenate([neighbors_2d[:, 0], [anchor_2d[0]]])
+                    y_all = np.concatenate([neighbors_2d[:, 1], [anchor_2d[1]]])
+                    pad = 0.05 * max(float(x_all.max() - x_all.min()), float(y_all.max() - y_all.min()), 1e-6)
+                    ax.set_xlim(float(x_all.min()) - pad, float(x_all.max()) + pad)
+                    ax.set_ylim(float(y_all.min()) - pad, float(y_all.max()) + pad)
+                else:
                     ax.set_xlim(float(anchor_2d[0]) - zr, float(anchor_2d[0]) + zr)
                     ax.set_ylim(float(anchor_2d[1]) - zr, float(anchor_2d[1]) + zr)
 
                 ax.set_aspect('equal')
-                ax.set_title(panel_title, fontsize=9)
-                ax.set_xlabel('PC1')
-                ax.set_ylabel('PC2')
+                ax.set_title(panel_title, fontsize=8.5)
+                ax.set_xlabel(f'PC1 (cloud std={pc1_std:.2f})')
+                ax.set_ylabel(f'PC2 (cloud std={pc2_std:.2f})')
                 ax.grid(alpha=0.3)
+                ax.legend(fontsize=7, loc='upper right')
 
             legend_handles = [
-                plt.Line2D([0], [0], color='black', lw=1.8, linestyle=(0, (4, 2)), label='Iso circle'),
+                plt.Line2D([0], [0], color='black', lw=1.8, linestyle=(0, (4, 2)), label='Iso circle r=σ'),
                 plt.Line2D([0], [0], color='black', lw=1.8, linestyle='solid', label='Manifold ellipse'),
                 plt.Line2D([0], [0], marker='*', color='w', markerfacecolor='#f5c518', markeredgecolor='#444',
-                           markersize=10, label='Target'),
+                           markersize=10, label='Anchor'),
             ]
             fig.legend(handles=legend_handles, loc='lower center', ncol=3, fontsize=8,
                        frameon=True, framealpha=0.95, edgecolor='#cccccc', bbox_to_anchor=(0.5, -0.03))
             fig.suptitle(
-                f"{method_label}: Circle + Ellipse Geometry (idx={target_idx})\n"
-                f"σ list={sigmas} | K={K_NEIGHBORS} | PC1 std={pc1_std:.3f}",
+                f"{method_label}: Circle + Ellipse Geometry (idx={target_idx})  |  "
+                f"λ_max={lambda_max:.4f}  √λ_max={sqrt_lambda_max:.4f}  |  "
+                f"α=σ/√λ_max={alpha:.4f}  (α/σ={alpha/max(max_sigma,1e-12):.4f})\n"
+                f"σ list={sigmas}  |  K={K_NEIGHBORS}  |  PC1 std={pc1_std:.3f}",
                 fontsize=11,
                 fontweight='bold',
                 y=1.03,
@@ -1121,6 +1181,8 @@ for loop_i, target_idx in enumerate(TARGET_IDCS):
             plt.savefig(save_path, dpi=180, bbox_inches='tight')
             plt.close(fig)
 
+        # Full-PCA normalized eigenvalues for panel D (most-squashed axis)
+        ev_full_norm = np.maximum(ev, 1e-30) / float(ev[0]) if ev.size > 0 else np.array([1.0])
         _save_circle_ellipse_overlay(
             X_vis,
             orig_vis,
@@ -1129,6 +1191,7 @@ for loop_i, target_idx in enumerate(TARGET_IDCS):
             VIZ_SIGMAS,
             'Manifold',
             os.path.join(manifold_dir, f"idx{target_idx}_circle_ellipse.png"),
+            evals_full_norm=ev_full_norm,
         )
 
         # Row 1, Panel 1: Manifold neighborhood
