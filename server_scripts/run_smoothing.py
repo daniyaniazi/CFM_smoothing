@@ -52,8 +52,8 @@ PROBE_CONFIG = "lr0.0001_bs512_epo50_clCE_spL1_spl0.0max_no_threshold"
 # Smoothing parameters
 K_NEIGHBORS = 500
 SCALE_WEIGHT = float(os.environ.get('CFM_SIGMA', '0.7'))  # supports multi-sigma via env
-N0_SMOOTH_SAMPLES = int(os.environ.get('CFM_N0_SAMPLES', '100'))  # paper stage-1 class selection
-N_SMOOTH_SAMPLES = int(os.environ.get('CFM_N_SAMPLES', '100'))  # supports multi-N via env
+N0_SMOOTH_SAMPLES = int(os.environ.get('CFM_N0_SAMPLES', '50'))   # paper stage-1 class selection
+N_SMOOTH_SAMPLES = int(os.environ.get('CFM_N_SAMPLES', '500'))  # supports multi-N via env
 N_TARGETS = 500           # number of val images to certify
 SAVE_VIZ = os.environ.get('CFM_SAVE_VIZ', '1').strip().lower() not in {'0', 'false', 'no'}
 N_VIZ = int(os.environ.get('CFM_N_VIZ', '10'))  # <0 means save viz for all targets
