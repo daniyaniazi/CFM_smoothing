@@ -754,58 +754,47 @@ def save_decode_nn_figure(target_idx, cv_orig, cv_noisy, sigma,
             pass
         return None
 
-    def _border(lbl):
-        return 'green' if lbl == label_id else 'red'
-
     panels = [(_load(target_idx),
-               f"ORIGINAL\n{get_class_name(PROBE_DATASET, label_id)}", 'black')]
+               f"ORIGINAL\n{get_class_name(PROBE_DATASET, label_id)}")]
 
-    # SAE panels — no exclude: if it returns target_idx with sim≈1.0, SAE decode is faithful
+    # SAE gallery — clean and noisy
     if sae_gal is not None:
-        nn_cs, sim_cs = nn_in_gallery(clean_clip, sae_gal, exclude_idx=None)
+        nn_cs, sim_cs = nn_in_gallery(clean_clip, sae_gal)
         nn_ns, sim_ns = nn_in_gallery(noisy_clip, sae_gal)
         lbl_cs = int(val_labels_t[nn_cs].item())
         lbl_ns = int(val_labels_t[nn_ns].item())
         panels += [
             (_load(nn_cs),
-             f"NN(clean) SAE gallery space\n{get_class_name(PROBE_DATASET, lbl_cs)}\nsim={sim_cs:.3f}",
-             _border(lbl_cs)),
+             f"NN(clean) SAE gallery\n{get_class_name(PROBE_DATASET, lbl_cs)}\nsim={sim_cs:.3f}"),
             (_load(nn_ns),
-             f"NN(noisy) SAE gallery space\n{get_class_name(PROBE_DATASET, lbl_ns)}\nsim={sim_ns:.3f}",
-             _border(lbl_ns)),
+             f"NN(noisy) SAE gallery\n{get_class_name(PROBE_DATASET, lbl_ns)}\nsim={sim_ns:.3f}"),
         ]
 
-    # TRUE CLIP panels — no exclude for clean: if it retrieves the same image, SAE decode is faithful
+    # TRUE CLIP gallery — clean and noisy
     if true_gal is not None:
-        nn_ct, sim_ct = nn_in_gallery(clean_clip, true_gal, exclude_idx=None)
+        nn_ct, sim_ct = nn_in_gallery(clean_clip, true_gal)
         nn_nt, sim_nt = nn_in_gallery(noisy_clip, true_gal)
         lbl_ct = int(val_labels_t[nn_ct].item())
         lbl_nt = int(val_labels_t[nn_nt].item())
         panels += [
             (_load(nn_ct),
-             f"NN(clean) TRUE CLIP gallery space\n{get_class_name(PROBE_DATASET, lbl_ct)}\nsim={sim_ct:.3f}",
-             _border(lbl_ct)),
+             f"NN(clean) TRUE CLIP gallery\n{get_class_name(PROBE_DATASET, lbl_ct)}\nsim={sim_ct:.3f}"),
             (_load(nn_nt),
-             f"NN(noisy) TRUE CLIP gallery space\n{get_class_name(PROBE_DATASET, lbl_nt)}\nsim={sim_nt:.3f}",
-             _border(lbl_nt)),
+             f"NN(noisy) TRUE CLIP gallery\n{get_class_name(PROBE_DATASET, lbl_nt)}\nsim={sim_nt:.3f}"),
         ]
 
     n_panels = len(panels)
     fig, axes = plt.subplots(1, n_panels, figsize=(4.5 * n_panels, 4.5))
-    for ax, (img, title, border) in zip(axes, panels):
+    for ax, (img, title) in zip(axes, panels):
         if img is not None:
             ax.imshow(img)
         else:
             ax.text(0.5, 0.5, "not found", ha='center', va='center', transform=ax.transAxes)
         ax.set_title(title, fontsize=8.5)
         ax.axis("off")
-        for spine in ax.spines.values():
-            spine.set_edgecolor(border)
-            spine.set_linewidth(3)
 
     fig.suptitle(
-        f"idx={target_idx}  σ={sigma}  with  cosine(clean_clip, noisy_clip) = {sim_cn:.3f}\n"
-        f"Green border = same class as original   Red = different",
+        f"idx={target_idx}  σ={sigma}  |  cosine(clean_clip, noisy_clip) = {sim_cn:.3f}",
         fontsize=9, fontweight='bold'
     )
     plt.tight_layout()
