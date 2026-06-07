@@ -21,6 +21,7 @@ sys.stdout.reconfigure(line_buffering=True)  # force line-buffered output for SL
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 import torch
+import torch.nn.functional as F
 import numpy as np
 import json
 from pathlib import Path
@@ -556,6 +557,38 @@ classifier_weights = method_obj.get_classifier_weights(
     probe_dataset=PROBE_DATASET, checkpoint_save_path=ckpt_path).to(args.device)
 print(f"Classifier weights: {classifier_weights.shape}")
 
+# SAE autoencoder (for decode sanity check: noisy cv [8192] → CLIP [512])
+autoencoder = None
+try:
+    from dictionary_learning.utils import load_dictionary
+    sae_base = os.path.join(str(args.save_dir_sae_ckpts['img']), args.config_name, 'trainer_0')
+    if os.path.exists(sae_base):
+        autoencoder, _ = load_dictionary(sae_base, args.device)
+        autoencoder.eval()
+        print(f"SAE loaded for decode sanity check from {sae_base}")
+    else:
+        print(f"SAE not found at {sae_base} — decode sanity check will be skipped")
+except Exception as e:
+    print(f"Could not load SAE ({e}) — decode sanity check will be skipped")
+
+
+# Feature extractor (for true CLIP gallery — panels 4+5 in decode NN figure)
+feature_extractor = None
+try:
+    from cfm.utils import get_img_model
+    feature_extractor, _preprocess_fe = get_img_model(args)
+    feature_extractor.eval()
+    print("Feature extractor loaded for true CLIP gallery", flush=True)
+except Exception as e:
+    print(f"Could not load feature extractor ({e}) — true CLIP gallery will be skipped", flush=True)
+
+
+def decode_cv_to_clip(cv_np, ae, device):
+    """cv_np [8192] → clip [512] via SAE linear decoder."""
+    with torch.no_grad():
+        t = torch.tensor(cv_np, dtype=torch.float32, device=device).unsqueeze(0).unsqueeze(0)  # [1,1,8192]
+        return ae.decode(t).squeeze().cpu().numpy()  # [512]
+
 
 # ===========================================================================
 # Step 2: Load cached concept vectors (built by build_knn_index.py)
@@ -639,6 +672,145 @@ if index_path is None or not os.path.exists(index_path):
 knn_index = annoy.AnnoyIndex(CONCEPT_DIM, 'euclidean')
 knn_index.load(index_path)
 print(f"Loaded KNN index from {index_path}", flush=True)
+
+
+# ===========================================================================
+# Pre-compute galleries for nearest-neighbour decode viz
+# ===========================================================================
+
+# Gallery 1: SAE-decoded — val cv [N, 8192] → SAE decode → [N, 512]
+sae_clip_gallery = None
+if autoencoder is not None:
+    print("Building SAE-decoded CLIP gallery for val set...", flush=True)
+    with torch.no_grad():
+        cv_t    = val_concept_vectors.to(args.device)
+        decoded = autoencoder.decode(cv_t.unsqueeze(1)).squeeze(1)   # [N, 512]
+        sae_clip_gallery = F.normalize(decoded, dim=-1)
+    print(f"SAE gallery ready: {sae_clip_gallery.shape}", flush=True)
+
+# Gallery 2: true CLIP — val images → feature_extractor → avg pool → [N, 512]
+true_clip_gallery = None
+TRUE_CLIP_CACHE = os.path.join(DATA_DIR, "true_clip_embeddings_imagenet_val.pt")
+if feature_extractor is not None and probe_val_dataset is not None:
+    if os.path.exists(TRUE_CLIP_CACHE):
+        print("Loading cached true CLIP gallery...", flush=True)
+        true_clip_gallery = F.normalize(
+            torch.load(TRUE_CLIP_CACHE, map_location=args.device), dim=-1)
+    else:
+        print("Computing true CLIP gallery (one-time, will be cached)...", flush=True)
+        from torch.utils.data import DataLoader as _DL
+        _loader = _DL(probe_val_dataset, batch_size=128, shuffle=False,
+                      num_workers=4, pin_memory=True)
+        _all = []
+        with torch.no_grad():
+            for _imgs, _ in _loader:
+                _feats = feature_extractor.get_pooled_feats(_imgs.to(args.device))
+                _all.append(_feats.mean(dim=[2, 3]).cpu())
+        _embs = torch.cat(_all, dim=0)
+        torch.save(_embs, TRUE_CLIP_CACHE)
+        true_clip_gallery = F.normalize(_embs.to(args.device), dim=-1)
+        print(f"True CLIP gallery ready: {true_clip_gallery.shape}", flush=True)
+
+
+def nn_in_gallery(clip_emb_np, gallery, exclude_idx=None):
+    """clip_emb_np [512] → (nn_idx, cosine_sim) in gallery [N, 512]."""
+    with torch.no_grad():
+        q = torch.tensor(clip_emb_np, dtype=torch.float32, device=args.device)
+        q = F.normalize(q, dim=-1)
+        sims = gallery @ q                      # [N]
+        if exclude_idx is not None:
+            sims[exclude_idx] = -1.0
+        idx = int(sims.argmax().item())
+        return idx, float(sims[idx].item())
+
+
+def save_decode_nn_figure(target_idx, cv_orig, cv_noisy, sigma,
+                           val_labels_t, val_dataset,
+                           sae_gal, true_gal, method_name, save_path):
+    """
+    5-panel figure (matches cfm_test.ipynb output):
+      Panel 1: original val image
+      Panel 2: NN(clean) — SAE gallery
+      Panel 3: NN(noisy) — SAE gallery
+      Panel 4: NN(clean) — TRUE CLIP gallery   (skipped if true_gal is None)
+      Panel 5: NN(noisy) — TRUE CLIP gallery   (skipped if true_gal is None)
+    """
+    from PIL import Image as _PILImage
+
+    clean_clip = decode_cv_to_clip(cv_orig,  autoencoder, args.device)
+    noisy_clip = decode_cv_to_clip(cv_noisy, autoencoder, args.device)
+
+    sim_cn = float(F.cosine_similarity(
+        F.normalize(torch.tensor(clean_clip), dim=0).unsqueeze(0),
+        F.normalize(torch.tensor(noisy_clip), dim=0).unsqueeze(0)).item())
+
+    label_id = int(val_labels_t[target_idx].item())
+
+    def _load(idx):
+        try:
+            if hasattr(val_dataset, 'samples'):
+                return _PILImage.open(val_dataset.samples[idx][0]).convert("RGB")
+        except Exception:
+            pass
+        return None
+
+    def _border(lbl):
+        return 'green' if lbl == label_id else 'red'
+
+    panels = [(_load(target_idx),
+               f"ORIGINAL\n{get_class_name(PROBE_DATASET, label_id)}", 'black')]
+
+    # SAE panels
+    if sae_gal is not None:
+        nn_cs, sim_cs = nn_in_gallery(clean_clip, sae_gal, exclude_idx=target_idx)
+        nn_ns, sim_ns = nn_in_gallery(noisy_clip, sae_gal)
+        lbl_cs = int(val_labels_t[nn_cs].item())
+        lbl_ns = int(val_labels_t[nn_ns].item())
+        panels += [
+            (_load(nn_cs),
+             f"NN(clean) SAE gallery space\n{get_class_name(PROBE_DATASET, lbl_cs)}\nsim={sim_cs:.3f}",
+             _border(lbl_cs)),
+            (_load(nn_ns),
+             f"NN(noisy) SAE gallery space\n{get_class_name(PROBE_DATASET, lbl_ns)}\nsim={sim_ns:.3f}",
+             _border(lbl_ns)),
+        ]
+
+    # TRUE CLIP panels
+    if true_gal is not None:
+        nn_ct, sim_ct = nn_in_gallery(clean_clip, true_gal, exclude_idx=target_idx)
+        nn_nt, sim_nt = nn_in_gallery(noisy_clip, true_gal)
+        lbl_ct = int(val_labels_t[nn_ct].item())
+        lbl_nt = int(val_labels_t[nn_nt].item())
+        panels += [
+            (_load(nn_ct),
+             f"NN(clean) TRUE CLIP gallery space\n{get_class_name(PROBE_DATASET, lbl_ct)}\nsim={sim_ct:.3f}",
+             _border(lbl_ct)),
+            (_load(nn_nt),
+             f"NN(noisy) TRUE CLIP gallery space\n{get_class_name(PROBE_DATASET, lbl_nt)}\nsim={sim_nt:.3f}",
+             _border(lbl_nt)),
+        ]
+
+    n_panels = len(panels)
+    fig, axes = plt.subplots(1, n_panels, figsize=(4.5 * n_panels, 4.5))
+    for ax, (img, title, border) in zip(axes, panels):
+        if img is not None:
+            ax.imshow(img)
+        else:
+            ax.text(0.5, 0.5, "not found", ha='center', va='center', transform=ax.transAxes)
+        ax.set_title(title, fontsize=8.5)
+        ax.axis("off")
+        for spine in ax.spines.values():
+            spine.set_edgecolor(border)
+            spine.set_linewidth(3)
+
+    fig.suptitle(
+        f"idx={target_idx}  σ={sigma}  with  cosine(clean_clip, noisy_clip) = {sim_cn:.3f}\n"
+        f"Green border = same class as original   Red = different",
+        fontsize=9, fontweight='bold'
+    )
+    plt.tight_layout()
+    plt.savefig(save_path, dpi=150, bbox_inches='tight')
+    plt.close(fig)
 
 
 # ===========================================================================
@@ -949,6 +1121,31 @@ for loop_i, target_idx in enumerate(TARGET_IDCS):
     cv_gauss_avg = cv_gauss_accum / N_SMOOTH_SAMPLES
     gauss_final_concepts = get_top_concept_info(cv_gauss_avg, concept_names, top_k=20)
 
+    # --- Decode sanity check: noisy cv [8192] → CLIP [512] ---
+    # Shows that noise in concept space produces a different point in CLIP space.
+    # Uses the averaged smoothed vector as a single "virtual token" and projects
+    # back to SAE input dimension (512) via the linear decoder W_dec.
+    decode_info = {}
+    if autoencoder is not None:
+        clean_clip  = decode_cv_to_clip(cv_orig,        autoencoder, args.device)  # [512]
+        m_clip      = decode_cv_to_clip(cv_smoothed_avg, autoencoder, args.device)  # [512]
+        g_clip      = decode_cv_to_clip(cv_gauss_avg,   autoencoder, args.device)  # [512]
+        t_clean = torch.tensor(clean_clip, dtype=torch.float32)
+        t_m     = torch.tensor(m_clip,     dtype=torch.float32)
+        t_g     = torch.tensor(g_clip,     dtype=torch.float32)
+        sim_m = float(F.cosine_similarity(
+            F.normalize(t_clean, dim=0).unsqueeze(0),
+            F.normalize(t_m, dim=0).unsqueeze(0)).item())
+        sim_g = float(F.cosine_similarity(
+            F.normalize(t_clean, dim=0).unsqueeze(0),
+            F.normalize(t_g, dim=0).unsqueeze(0)).item())
+        decode_info = {
+            'cosine_clean_vs_manifold': round(sim_m, 4),
+            'cosine_clean_vs_gaussian': round(sim_g, 4),
+        }
+        print(f"    decode: cosine(clean,manifold)={sim_m:.4f}  cosine(clean,gaussian)={sim_g:.4f}  "
+              f"(1.0=identical, 0.0=orthogonal)", flush=True)
+
     # --- Print ---
     orig_concepts = get_top_concept_info(cv_orig, concept_names, top_k=20)
 
@@ -1209,108 +1406,67 @@ for loop_i, target_idx in enumerate(TARGET_IDCS):
             evals_full_norm=ev_full_norm,
         )
 
-        # Row 1, Panel 1: Manifold neighborhood
-        ax = axes[0, 0]
-        ax.scatter(X_vis[:, 0], X_vis[:, 1], c='lightblue', s=8, alpha=0.4, label=f'{K_NEIGHBORS} KNN')
-        for rank in range(min(5, len(nn_idcs))):
-            nn_cv_vis = pca_vis.transform(train_concept_vectors[nn_idcs[rank]].numpy().reshape(1, -1))[0]
-            ax.scatter(nn_cv_vis[0], nn_cv_vis[1], c='blue', s=80, marker='D', zorder=5,
-                       edgecolors='darkblue', linewidths=1.5)
-            ax.annotate(f'N{rank+1}', (nn_cv_vis[0], nn_cv_vis[1]), fontsize=8, fontweight='bold',
-                        xytext=(5, 5), textcoords='offset points')
-        ax.scatter(orig_vis[0], orig_vis[1], c='red', s=200, marker='*', zorder=10,
-                   edgecolors='darkred', linewidths=1.5, label='Target')
-        ax.scatter(mean_vis[0], mean_vis[1], c='green', s=100, marker='X', zorder=10,
-                   edgecolors='darkgreen', linewidths=1.5, label='Mean')
-        ax.set_title(f'Manifold Neighborhood (PCA)\nTrue: {get_class_name(PROBE_DATASET, label_true)}',
-                     fontsize=11, fontweight='bold')
-        ax.set_xlabel('PC1'); ax.set_ylabel('PC2'); ax.legend(fontsize=8); ax.grid(True, alpha=0.3)
-
-        # Row 1, Panel 2: Manifold noisy samples
-        ax = axes[0, 1]
-        ax.scatter(X_vis[:, 0], X_vis[:, 1], c='lightgray', s=5, alpha=0.2)
-        colors = ['green' if c else 'orange' for c in noisy_correct]
-        ax.scatter(noisy_vis[:, 0], noisy_vis[:, 1], c=colors, s=15, alpha=0.6,
-                   label=f'{N_SMOOTH_SAMPLES} samples')
-        ax.scatter(orig_vis[0], orig_vis[1], c='red', s=200, marker='*', zorder=10,
-                   edgecolors='darkred', linewidths=1.5, label='Original')
-        cov = np.cov(noisy_vis.T)
-        eigenvalues, eigenvectors = np.linalg.eigh(cov)
-        angle = np.degrees(np.arctan2(eigenvectors[1, 1], eigenvectors[0, 1]))
-        for n_std in [1, 2]:
-            ell = Ellipse(xy=noisy_vis.mean(axis=0), width=2*n_std*np.sqrt(eigenvalues[1]),
-                          height=2*n_std*np.sqrt(eigenvalues[0]), angle=angle,
-                          fill=False, edgecolor='purple', linestyle='--', linewidth=1.5, alpha=0.6)
-            ax.add_patch(ell)
-        n_correct = sum(noisy_correct)
-        ax.set_title(f'Manifold Samples (σ={SCALE_WEIGHT})\nCorrect: {n_correct}/{N_SMOOTH_SAMPLES}',
-                     fontsize=11, fontweight='bold')
-        ax.set_xlabel('PC1'); ax.set_ylabel('PC2'); ax.legend(fontsize=8); ax.grid(True, alpha=0.3)
-
-        # Row 1, Panel 3: Top Activations — ranked by SMOOTHED score, show both orig & smoothed
-        ax = axes[0, 2]
+        # --- Manifold: compact 1x2 — Top Activated (left) + Least Activated (right), same scale ---
         n_show = 20
-        name_to_idx = {(concept_names[i] if concept_names else f"c_{i}"): i for i in range(len(cv_orig))}
-        # Rank by smoothed (manifold) activation descending
         smooth_top_idxs = np.argsort(-cv_smoothed_avg)[:n_show]
-        top_names = [(concept_names[i] if concept_names else f"c_{i}") for i in smooth_top_idxs]
-        top_orig_vals = [float(cv_orig[i]) for i in smooth_top_idxs]
+        top_names       = [(concept_names[i] if concept_names else f"c_{i}") for i in smooth_top_idxs]
+        top_orig_vals   = [float(cv_orig[i])        for i in smooth_top_idxs]
         top_smooth_vals = [float(cv_smoothed_avg[i]) for i in smooth_top_idxs]
 
-        # Compute shared x-axis max across all 3 bar panels
-        all_bar_vals = top_orig_vals + top_smooth_vals
-        if m_drops:
-            all_bar_vals += [d[2] for d in m_drops[:10]] + [d[3] for d in m_drops[:10]]
-        if m_least:
-            all_bar_vals += [l[2] for l in m_least[:10]] + [l[1] for l in m_least[:10]]
-        shared_xlim = max(all_bar_vals) * 1.08 if all_bar_vals else 1.0
+        active_mask_m   = cv_orig > 1e-6
+        active_idxs_m   = np.where(active_mask_m)[0]
+        least_idxs_m    = sorted(active_idxs_m, key=lambda i: cv_smoothed_avg[i])[:n_show]
+        least_names_m   = [(concept_names[i] if concept_names else f"c_{i}") for i in least_idxs_m]
+        least_orig_m    = [float(cv_orig[i])        for i in least_idxs_m]
+        least_smooth_m  = [float(cv_smoothed_avg[i]) for i in least_idxs_m]
 
-        y_pos = np.arange(n_show)
-        ax.barh(y_pos - 0.2, top_orig_vals[::-1], height=0.35, color='steelblue', label='Original', alpha=0.8)
-        ax.barh(y_pos + 0.2, top_smooth_vals[::-1], height=0.35, color='coral', label='Manifold avg', alpha=0.8)
-        ax.set_yticks(y_pos); ax.set_yticklabels([n[:22] for n in top_names[::-1]], fontsize=8)
-        ax.set_xlim(0, shared_xlim); ax.set_xlabel('Activation')
-        ax.set_title(f'Top Activations: {get_class_name(PROBE_DATASET, pred_orig)} → '
+        shared_xlim_m = max(top_orig_vals + top_smooth_vals + least_orig_m + least_smooth_m) * 1.08
+
+        fig_m, axes_m = plt.subplots(1, 2, figsize=(18, 8))
+        y = np.arange(n_show)
+
+        ax = axes_m[0]
+        ax.barh(y - 0.2, top_orig_vals[::-1],   height=0.35, color='steelblue', label='Original',     alpha=0.8)
+        ax.barh(y + 0.2, top_smooth_vals[::-1],  height=0.35, color='coral',     label='Manifold avg', alpha=0.8)
+        ax.set_yticks(y); ax.set_yticklabels([n[:25] for n in top_names[::-1]], fontsize=8)
+        ax.set_xlim(0, shared_xlim_m); ax.set_xlabel('Activation')
+        ax.set_title(f'Top Activated  [{get_class_name(PROBE_DATASET, pred_orig)} → '
                      f'{get_class_name(PROBE_DATASET, pred_smooth)} '
-                     f'({"STABLE ✓" if pred_orig == pred_smooth else "CHANGED ✗"})',
-                     fontsize=11, fontweight='bold')
+                     f'{"STABLE ✓" if pred_orig == pred_smooth else "CHANGED ✗"}]',
+                     fontsize=10, fontweight='bold')
         ax.legend(fontsize=8); ax.grid(True, axis='x', alpha=0.3)
 
-        # Row 2, Panel 1: Top DROPS (had score in original, suppressed after smoothing)
-        ax = axes[1, 0]
-        if m_drops:
-            drop_names = [d[0][:22] for d in m_drops[:10]]
-            drop_orig = [d[2] for d in m_drops[:10]]
-            drop_smooth = [d[3] for d in m_drops[:10]]
-            y_d = np.arange(len(drop_names))
-            ax.barh(y_d - 0.2, drop_orig[::-1], height=0.35, color='steelblue', label='Original', alpha=0.8)
-            ax.barh(y_d + 0.2, drop_smooth[::-1], height=0.35, color='#d32f2f', label='After smoothing', alpha=0.8)
-            ax.set_yticks(y_d); ax.set_yticklabels(drop_names[::-1], fontsize=8)
-        ax.set_xlim(0, shared_xlim); ax.set_xlabel('Activation')
-        ax.set_title('Manifold: Top Drops (suppressed)', fontsize=11, fontweight='bold', color='#d32f2f')
+        ax = axes_m[1]
+        ax.barh(y - 0.2, least_orig_m[::-1],   height=0.35, color='steelblue', label='Original',     alpha=0.8)
+        ax.barh(y + 0.2, least_smooth_m[::-1],  height=0.35, color='coral',     label='Manifold avg', alpha=0.8)
+        ax.set_yticks(y); ax.set_yticklabels([n[:25] for n in least_names_m[::-1]], fontsize=8)
+        ax.set_xlim(0, shared_xlim_m); ax.set_xlabel('Activation')
+        ax.set_title('Least Activated (originally active, sorted by smoothed score)',
+                     fontsize=10, fontweight='bold')
         ax.legend(fontsize=8); ax.grid(True, axis='x', alpha=0.3)
 
-        # Row 2, Panel 2: Least Activated (lowest manifold activation, show original for comparison)
-        ax = axes[1, 1]
-        if m_least:
-            least_names = [l[0][:22] for l in m_least[:10]]
-            least_orig = [l[2] for l in m_least[:10]]
-            least_smooth = [l[1] for l in m_least[:10]]
-            y_l = np.arange(len(least_names))
-            ax.barh(y_l - 0.2, least_orig[::-1], height=0.35, color='steelblue', label='Original', alpha=0.8)
-            ax.barh(y_l + 0.2, least_smooth[::-1], height=0.35, color='#757575', label='Manifold', alpha=0.8)
-            ax.set_yticks(y_l); ax.set_yticklabels(least_names[::-1], fontsize=8)
-        ax.set_xlim(0, shared_xlim); ax.set_xlabel('Activation')
-        ax.set_title('Manifold: Least Activated', fontsize=11, fontweight='bold', color='#757575')
-        ax.legend(fontsize=8); ax.grid(True, axis='x', alpha=0.3)
-
-        # Row 2, Panel 3: empty
-        axes[1, 2].axis('off')
-
-        fig.suptitle(f'Manifold Smoothing — idx={target_idx}', fontsize=14, fontweight='bold', y=1.01)
+        fig_m.suptitle(
+            f'Manifold Smoothing — idx={target_idx}  σ={SCALE_WEIGHT}\n'
+            f'True: {get_class_name(PROBE_DATASET, label_true)}  |  '
+            f'Orig pred: {get_class_name(PROBE_DATASET, pred_orig)}  |  '
+            f'Smoothed pred: {get_class_name(PROBE_DATASET, pred_smooth)}  '
+            f'[{"STABLE ✓" if pred_orig == pred_smooth else "CHANGED ✗"}]',
+            fontsize=11, fontweight='bold')
         plt.tight_layout()
-        plt.savefig(os.path.join(manifold_dir, f"idx{target_idx}_manifold.png"), dpi=150, bbox_inches='tight')
-        plt.close(fig)
+        plt.savefig(os.path.join(manifold_dir, f"idx{target_idx}_top_least_activation.png"),
+                    dpi=150, bbox_inches='tight')
+        plt.close(fig_m)
+
+        # Decode NN figure — manifold
+        if sae_clip_gallery is not None or true_clip_gallery is not None:
+            cv_noisy_example = cv_whitened + np.random.normal(0, alpha, size=len(ev))
+            cv_noisy_example = cv_noisy_example @ (np.sqrt(ev)[:, None] * Vt) + mean_nn
+            save_decode_nn_figure(
+                target_idx, cv_orig, cv_noisy_example, round(SCALE_WEIGHT, 3),
+                val_labels, probe_val_dataset,
+                sae_clip_gallery, true_clip_gallery, 'Manifold Smoothing',
+                os.path.join(manifold_dir, f"idx{target_idx}_decode_nn.png")
+            )
 
         # Manifold JSON
         manifold_result = {
@@ -1371,98 +1527,66 @@ for loop_i, target_idx in enumerate(TARGET_IDCS):
             os.path.join(isotropic_dir, f"idx{target_idx}_circle_ellipse.png"),
         )
 
-        # Row 1, Panel 1: Neighborhood reference
-        ax = axes[0, 0]
-        ax.scatter(X_vis[:, 0], X_vis[:, 1], c='lightblue', s=8, alpha=0.4, label=f'{K_NEIGHBORS} KNN')
-        ax.scatter(orig_vis[0], orig_vis[1], c='red', s=200, marker='*', zorder=10,
-                   edgecolors='darkred', linewidths=1.5, label='Target')
-        ax.set_title(f'Concept Space (PCA)\nTrue: {get_class_name(PROBE_DATASET, label_true)}',
-                     fontsize=11, fontweight='bold')
-        ax.set_xlabel('PC1'); ax.set_ylabel('PC2'); ax.legend(fontsize=8); ax.grid(True, alpha=0.3)
-
-        # Row 1, Panel 2: Isotropic Gaussian noisy samples
-        ax = axes[0, 1]
-        ax.scatter(X_vis[:, 0], X_vis[:, 1], c='lightgray', s=5, alpha=0.2)
-        colors_g = ['green' if c else 'orange' for c in gauss_correct]
-        ax.scatter(gauss_vis[:, 0], gauss_vis[:, 1], c=colors_g, s=15, alpha=0.6,
-                   label=f'{N_SMOOTH_SAMPLES} samples')
-        ax.scatter(orig_vis[0], orig_vis[1], c='red', s=200, marker='*', zorder=10,
-                   edgecolors='darkred', linewidths=1.5, label='Original')
-        cov_g = np.cov(gauss_vis.T)
-        ev_g, evec_g = np.linalg.eigh(cov_g)
-        angle_g = np.degrees(np.arctan2(evec_g[1, 1], evec_g[0, 1]))
-        for n_std in [1, 2]:
-            ell = Ellipse(xy=gauss_vis.mean(axis=0), width=2*n_std*np.sqrt(ev_g[1]),
-                          height=2*n_std*np.sqrt(ev_g[0]), angle=angle_g,
-                          fill=False, edgecolor='purple', linestyle='--', linewidth=1.5, alpha=0.6)
-            ax.add_patch(ell)
-        n_correct_g = sum(gauss_correct)
-        ax.set_title(f'Isotropic Gaussian (σ={gauss_sigma:.3f})\nCorrect: {n_correct_g}/{N_SMOOTH_SAMPLES}',
-                     fontsize=11, fontweight='bold')
-        ax.set_xlabel('PC1'); ax.set_ylabel('PC2'); ax.legend(fontsize=8); ax.grid(True, alpha=0.3)
-
-        # Row 1, Panel 3: Top Activations — ranked by SMOOTHED (isotropic) score
-        ax = axes[0, 2]
+        # --- Isotropic: compact 1x2 — Top Activated (left) + Least Activated (right), same scale ---
         n_show = 20
-        gauss_top_idxs = np.argsort(-cv_gauss_avg)[:n_show]
-        g_top_names = [(concept_names[i] if concept_names else f"c_{i}") for i in gauss_top_idxs]
-        g_top_orig_vals = [float(cv_orig[i]) for i in gauss_top_idxs]
+        gauss_top_idxs  = np.argsort(-cv_gauss_avg)[:n_show]
+        g_top_names     = [(concept_names[i] if concept_names else f"c_{i}") for i in gauss_top_idxs]
+        g_top_orig_vals = [float(cv_orig[i])      for i in gauss_top_idxs]
         g_top_smooth_vals = [float(cv_gauss_avg[i]) for i in gauss_top_idxs]
 
-        # Shared x-axis max across all 3 bar panels
-        g_all_bar_vals = g_top_orig_vals + g_top_smooth_vals
-        if g_drops:
-            g_all_bar_vals += [d[2] for d in g_drops[:10]] + [d[3] for d in g_drops[:10]]
-        if g_least:
-            g_all_bar_vals += [l[2] for l in g_least[:10]] + [l[1] for l in g_least[:10]]
-        g_shared_xlim = max(g_all_bar_vals) * 1.08 if g_all_bar_vals else 1.0
+        active_mask_g  = cv_orig > 1e-6
+        active_idxs_g  = np.where(active_mask_g)[0]
+        least_idxs_g   = sorted(active_idxs_g, key=lambda i: cv_gauss_avg[i])[:n_show]
+        least_names_g  = [(concept_names[i] if concept_names else f"c_{i}") for i in least_idxs_g]
+        least_orig_g   = [float(cv_orig[i])      for i in least_idxs_g]
+        least_smooth_g = [float(cv_gauss_avg[i]) for i in least_idxs_g]
 
-        y_pos_g = np.arange(n_show)
-        ax.barh(y_pos_g - 0.2, g_top_orig_vals[::-1], height=0.35, color='steelblue', label='Original', alpha=0.8)
-        ax.barh(y_pos_g + 0.2, g_top_smooth_vals[::-1], height=0.35, color='coral', label='Isotropic avg', alpha=0.8)
-        ax.set_yticks(y_pos_g); ax.set_yticklabels([n[:22] for n in g_top_names[::-1]], fontsize=8)
-        ax.set_xlim(0, g_shared_xlim); ax.set_xlabel('Activation')
-        ax.set_title(f'Top Activations: {get_class_name(PROBE_DATASET, pred_orig)} → '
+        shared_xlim_g = max(g_top_orig_vals + g_top_smooth_vals + least_orig_g + least_smooth_g) * 1.08
+
+        fig_g, axes_g = plt.subplots(1, 2, figsize=(18, 8))
+        y = np.arange(n_show)
+
+        ax = axes_g[0]
+        ax.barh(y - 0.2, g_top_orig_vals[::-1],   height=0.35, color='steelblue', label='Original',      alpha=0.8)
+        ax.barh(y + 0.2, g_top_smooth_vals[::-1],  height=0.35, color='#FF9800',   label='Isotropic avg', alpha=0.8)
+        ax.set_yticks(y); ax.set_yticklabels([n[:25] for n in g_top_names[::-1]], fontsize=8)
+        ax.set_xlim(0, shared_xlim_g); ax.set_xlabel('Activation')
+        ax.set_title(f'Top Activated  [{get_class_name(PROBE_DATASET, pred_orig)} → '
                      f'{get_class_name(PROBE_DATASET, pred_gauss)} '
-                     f'({"STABLE ✓" if pred_orig == pred_gauss else "CHANGED ✗"})',
-                     fontsize=11, fontweight='bold')
+                     f'{"STABLE ✓" if pred_orig == pred_gauss else "CHANGED ✗"}]',
+                     fontsize=10, fontweight='bold')
         ax.legend(fontsize=8); ax.grid(True, axis='x', alpha=0.3)
 
-        # Row 2, Panel 1: Top DROPS
-        ax = axes[1, 0]
-        if g_drops:
-            drop_names = [d[0][:22] for d in g_drops[:10]]
-            drop_orig = [d[2] for d in g_drops[:10]]
-            drop_smooth = [d[3] for d in g_drops[:10]]
-            y_d = np.arange(len(drop_names))
-            ax.barh(y_d - 0.2, drop_orig[::-1], height=0.35, color='steelblue', label='Original', alpha=0.8)
-            ax.barh(y_d + 0.2, drop_smooth[::-1], height=0.35, color='#d32f2f', label='After smoothing', alpha=0.8)
-            ax.set_yticks(y_d); ax.set_yticklabels(drop_names[::-1], fontsize=8)
-        ax.set_xlim(0, g_shared_xlim); ax.set_xlabel('Activation')
-        ax.set_title('Isotropic: Top Drops (suppressed)', fontsize=11, fontweight='bold', color='#d32f2f')
+        ax = axes_g[1]
+        ax.barh(y - 0.2, least_orig_g[::-1],   height=0.35, color='steelblue', label='Original',      alpha=0.8)
+        ax.barh(y + 0.2, least_smooth_g[::-1],  height=0.35, color='#FF9800',   label='Isotropic avg', alpha=0.8)
+        ax.set_yticks(y); ax.set_yticklabels([n[:25] for n in least_names_g[::-1]], fontsize=8)
+        ax.set_xlim(0, shared_xlim_g); ax.set_xlabel('Activation')
+        ax.set_title('Least Activated (originally active, sorted by smoothed score)',
+                     fontsize=10, fontweight='bold')
         ax.legend(fontsize=8); ax.grid(True, axis='x', alpha=0.3)
 
-        # Row 2, Panel 2: Least Activated
-        ax = axes[1, 1]
-        if g_least:
-            least_names = [l[0][:22] for l in g_least[:10]]
-            least_orig = [l[2] for l in g_least[:10]]
-            least_smooth = [l[1] for l in g_least[:10]]
-            y_l = np.arange(len(least_names))
-            ax.barh(y_l - 0.2, least_orig[::-1], height=0.35, color='steelblue', label='Original', alpha=0.8)
-            ax.barh(y_l + 0.2, least_smooth[::-1], height=0.35, color='#757575', label='Isotropic', alpha=0.8)
-            ax.set_yticks(y_l); ax.set_yticklabels(least_names[::-1], fontsize=8)
-        ax.set_xlim(0, g_shared_xlim); ax.set_xlabel('Activation')
-        ax.set_title('Isotropic: Least Activated', fontsize=11, fontweight='bold', color='#757575')
-        ax.legend(fontsize=8); ax.grid(True, axis='x', alpha=0.3)
-
-        # Row 2, Panel 3: empty
-        axes[1, 2].axis('off')
-
-        fig.suptitle(f'Isotropic Gaussian Smoothing — idx={target_idx}', fontsize=14, fontweight='bold', y=1.01)
+        fig_g.suptitle(
+            f'Isotropic Smoothing — idx={target_idx}  σ={gauss_sigma}\n'
+            f'True: {get_class_name(PROBE_DATASET, label_true)}  |  '
+            f'Orig pred: {get_class_name(PROBE_DATASET, pred_orig)}  |  '
+            f'Smoothed pred: {get_class_name(PROBE_DATASET, pred_gauss)}  '
+            f'[{"STABLE ✓" if pred_orig == pred_gauss else "CHANGED ✗"}]',
+            fontsize=11, fontweight='bold')
         plt.tight_layout()
-        plt.savefig(os.path.join(isotropic_dir, f"idx{target_idx}_isotropic.png"), dpi=150, bbox_inches='tight')
-        plt.close(fig)
+        plt.savefig(os.path.join(isotropic_dir, f"idx{target_idx}_top_least_activation.png"),
+                    dpi=150, bbox_inches='tight')
+        plt.close(fig_g)
+
+        # Decode NN figure — isotropic
+        if sae_clip_gallery is not None or true_clip_gallery is not None:
+            cv_noisy_example = cv_orig + np.random.normal(0, gauss_sigma, size=cv_orig.shape)
+            save_decode_nn_figure(
+                target_idx, cv_orig, cv_noisy_example, round(float(gauss_sigma), 3),
+                val_labels, probe_val_dataset,
+                sae_clip_gallery, true_clip_gallery, 'Isotropic Smoothing',
+                os.path.join(isotropic_dir, f"idx{target_idx}_decode_nn.png")
+            )
 
         # Isotropic JSON
         isotropic_result = {
