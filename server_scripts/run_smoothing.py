@@ -760,9 +760,9 @@ def save_decode_nn_figure(target_idx, cv_orig, cv_noisy, sigma,
     panels = [(_load(target_idx),
                f"ORIGINAL\n{get_class_name(PROBE_DATASET, label_id)}", 'black')]
 
-    # SAE panels
+    # SAE panels — no exclude: if it returns target_idx with sim≈1.0, SAE decode is faithful
     if sae_gal is not None:
-        nn_cs, sim_cs = nn_in_gallery(clean_clip, sae_gal, exclude_idx=target_idx)
+        nn_cs, sim_cs = nn_in_gallery(clean_clip, sae_gal, exclude_idx=None)
         nn_ns, sim_ns = nn_in_gallery(noisy_clip, sae_gal)
         lbl_cs = int(val_labels_t[nn_cs].item())
         lbl_ns = int(val_labels_t[nn_ns].item())
@@ -775,9 +775,9 @@ def save_decode_nn_figure(target_idx, cv_orig, cv_noisy, sigma,
              _border(lbl_ns)),
         ]
 
-    # TRUE CLIP panels
+    # TRUE CLIP panels — no exclude for clean: if it retrieves the same image, SAE decode is faithful
     if true_gal is not None:
-        nn_ct, sim_ct = nn_in_gallery(clean_clip, true_gal, exclude_idx=target_idx)
+        nn_ct, sim_ct = nn_in_gallery(clean_clip, true_gal, exclude_idx=None)
         nn_nt, sim_nt = nn_in_gallery(noisy_clip, true_gal)
         lbl_ct = int(val_labels_t[nn_ct].item())
         lbl_nt = int(val_labels_t[nn_nt].item())
