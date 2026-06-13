@@ -31,10 +31,11 @@ export CFM_N_SAMPLES=500
 export CFM_SAVE_VIZ=${CFM_SAVE_VIZ:-1}
 export CFM_N_VIZ=${CFM_N_VIZ:-10}
 export CFM_VIZ_SIGMAS=${CFM_VIZ_SIGMAS:-$CFM_SIGMA}
+export CFM_VIZ_ONLY=${CFM_VIZ_ONLY:-0}   # set to 1 to regenerate viz without rerunning smoothing
 
 echo "================================================"
 echo "CFM Smoothing — sigma=$CFM_SIGMA, N=$CFM_N_SAMPLES"
-echo "Viz: SAVE=$CFM_SAVE_VIZ, N_VIZ=$CFM_N_VIZ, VIZ_SIGMAS=$CFM_VIZ_SIGMAS"
+echo "Viz: SAVE=$CFM_SAVE_VIZ, N_VIZ=$CFM_N_VIZ, VIZ_SIGMAS=$CFM_VIZ_SIGMAS, VIZ_ONLY=$CFM_VIZ_ONLY"
 echo "Array task: $SLURM_ARRAY_TASK_ID / Job: $SLURM_JOB_ID"
 echo "Running on: $(hostname)"
 echo "GPU: ${CUDA_VISIBLE_DEVICES:-unset}"

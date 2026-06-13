@@ -36,6 +36,43 @@ matplotlib.use('Agg')  # no display on server
 import matplotlib.pyplot as plt
 from matplotlib.patches import Ellipse
 
+# ── Academic figure style ─────────────────────────────────────────────────────
+plt.rcParams.update({
+    'font.family':      'serif',
+    'font.size':        11,
+    'axes.titlesize':   12,
+    'axes.labelsize':   11,
+    'xtick.labelsize':  9,
+    'ytick.labelsize':  9,
+    'legend.fontsize':  9,
+    'figure.facecolor': 'white',
+    'axes.facecolor':   'white',
+    'axes.spines.top':  False,
+    'axes.spines.right':False,
+    'axes.grid':        True,
+    'grid.alpha':       0.25,
+    'grid.linestyle':   '--',
+    'lines.linewidth':  2.0,
+    'lines.markersize': 5,
+    'savefig.dpi':      150,
+    'savefig.bbox':     'tight',
+})
+
+C = {
+    'manifold':     '#f5c518',
+    'isotropic':    '#2166ac',
+    'lat_manifold': '#74c476',
+    'lat_iso':      '#aec7e8',
+    'positive':     '#1b7837',
+    'negative':     '#762a83',
+    'overall':      '#636363',
+    'mc':           '#74c476',
+    'iso_circle':   '#2166ac',
+    'mani_ellipse': '#f5c518',
+    'knn':          '#aec7e8',
+    'anchor':       'black',
+}
+
 from cfm.arg_parser import get_default_parser
 from cfm.utils import common_init, get_probe_dataset
 from cfm import config as cfm_config
@@ -67,6 +104,8 @@ if _viz_sigmas_raw:
         VIZ_SIGMAS = [SCALE_WEIGHT]
 else:
     VIZ_SIGMAS = [SCALE_WEIGHT]
+
+VIZ_ONLY = os.environ.get('CFM_VIZ_ONLY', '0').strip().lower() in {'1', 'true', 'yes'}
 
 DATA_DIR = os.path.join(os.path.dirname(__file__), '..', 'smoothing_data')  # shared artifacts (vectors, index)
 SAVE_DIR = os.path.join(DATA_DIR, f'sigma_{SCALE_WEIGHT:.2f}_n{N_SMOOTH_SAMPLES}')  # sigma+N specific results
@@ -862,7 +901,397 @@ else:
 print(f"Certifying {N_TARGETS} val images (viz: {_viz_text})", flush=True)
 viz_count = 0
 
-for loop_i, target_idx in enumerate(TARGET_IDCS):
+# ===========================================================================
+# VIZ-ONLY mode: reload existing JSONL results and regenerate all figures
+# without rerunning any smoothing computation.
+# ===========================================================================
+if VIZ_ONLY:
+    print("\n" + "=" * 70, flush=True)
+    print("VIZ-ONLY mode: regenerating figures from existing JSONL", flush=True)
+    print("=" * 70, flush=True)
+
+    _target_set = set(TARGET_IDCS)
+    _viz_only_results = []
+    if os.path.exists(results_jsonl_path):
+        with open(results_jsonl_path, 'r') as _f:
+            for _line in _f:
+                _line = _line.strip()
+                if _line:
+                    try:
+                        _r = json.loads(_line)
+                        if _r['idx'] in _target_set:
+                            _viz_only_results.append(_r)
+                    except json.JSONDecodeError:
+                        pass
+    print(f"Loaded {len(_viz_only_results)} results to regenerate viz for", flush=True)
+
+    for _viz_r in _viz_only_results:
+        target_idx  = _viz_r['idx']
+        label_true  = _viz_r['label_true']
+        pred_orig   = _viz_r['pred_orig']
+        pred_smooth = _viz_r.get('pred_manifold', _viz_r.get('top_class', -1))
+        pred_gauss  = _viz_r['pred_gaussian']
+        cv_orig     = val_concept_vectors[target_idx].numpy()
+
+        save_viz = SAVE_VIZ and (N_VIZ < 0 or viz_count < N_VIZ)
+        if not save_viz:
+            break
+
+        # Recompute KNN/PCA manifold geometry
+        nn_idcs     = knn_index.get_nns_by_vector(cv_orig.tolist(), K_NEIGHBORS)
+        X_neighbors = np.stack([train_concept_vectors[i].numpy() for i in nn_idcs])
+        mean_nn     = X_neighbors.mean(axis=0)
+        X_centered  = X_neighbors - mean_nn
+        pca         = PCA(n_components=K_NEIGHBORS)
+        pca.fit(X_centered)
+        ev  = pca.explained_variance_
+        Vt  = pca.components_
+
+        cv_whitened  = (cv_orig - mean_nn) @ Vt.T / np.sqrt(ev)
+        lambda_max      = float(ev[0])
+        sqrt_lambda_max = float(np.sqrt(max(lambda_max, 1e-12)))
+        alpha           = SCALE_WEIGHT / sqrt_lambda_max
+
+        # PCA projection for 2-D overlay
+        pca_vis  = PCA(n_components=2)
+        X_vis    = pca_vis.fit_transform(X_neighbors)
+        orig_vis = pca_vis.transform(cv_orig.reshape(1, -1))[0]
+
+        ev_vis_norm = np.asarray(pca_vis.explained_variance_[:2], dtype=np.float64)
+        if ev_vis_norm.size < 2:
+            ev_vis_norm = np.asarray([1.0, 1.0], dtype=np.float64)
+        ev_vis_norm = np.maximum(ev_vis_norm, 1e-12)
+        ev_vis_norm = ev_vis_norm / ev_vis_norm.max()
+
+        ev_full_norm = np.maximum(ev, 1e-30) / float(ev[0]) if ev.size > 0 else np.array([1.0])
+        gauss_sigma  = SCALE_WEIGHT
+
+        # Recompute averaged smoothed vectors
+        cv_smoothed_accum = np.zeros_like(cv_orig)
+        for _ in range(N_SMOOTH_SAMPLES):
+            _noise = np.random.normal(0, alpha, size=len(ev))
+            _cv_n  = cv_whitened + _noise
+            cv_smoothed_accum += _cv_n @ (np.sqrt(ev)[:, None] * Vt) + mean_nn
+        cv_smoothed_avg = cv_smoothed_accum / N_SMOOTH_SAMPLES
+
+        cv_gauss_accum = np.zeros_like(cv_orig)
+        for _ in range(N_SMOOTH_SAMPLES):
+            _noise = np.random.normal(0, gauss_sigma, size=cv_orig.shape)
+            cv_gauss_accum += cv_orig + _noise
+        cv_gauss_avg = cv_gauss_accum / N_SMOOTH_SAMPLES
+
+        # Recompute noisy sample clouds for overlay figures
+        vis_noisy_points = []
+        vis_noisy_preds  = []
+        for _ in range(N_SMOOTH_SAMPLES):
+            _noise = np.random.normal(0, alpha, size=len(ev))
+            _cv_s  = (cv_whitened + _noise) @ (np.sqrt(ev)[:, None] * Vt) + mean_nn
+            vis_noisy_points.append(_cv_s)
+            vis_noisy_preds.append(classify_concept_vector(
+                torch.tensor(_cv_s, dtype=torch.float32, device=args.device),
+                classifier_weights))
+        noisy_vis = pca_vis.transform(np.stack(vis_noisy_points))
+
+        vis_gauss_points     = []
+        vis_gauss_preds_list = []
+        for _ in range(N_SMOOTH_SAMPLES):
+            _noise = np.random.normal(0, gauss_sigma, size=cv_orig.shape)
+            _cv_g  = cv_orig + _noise
+            vis_gauss_points.append(_cv_g)
+            vis_gauss_preds_list.append(classify_concept_vector(
+                torch.tensor(_cv_g, dtype=torch.float32, device=args.device),
+                classifier_weights))
+        gauss_vis = pca_vis.transform(np.stack(vis_gauss_points))
+
+        print(f"  Regenerating viz for idx={target_idx}", flush=True)
+
+        # ── zoom helpers (duplicated here so they're available outside the main loop) ──
+        def _zoom_setup_vo(neighbors_2d, sigmas):
+            pc1_std   = float(np.std(neighbors_2d[:, 0]))
+            pc2_std   = float(np.std(neighbors_2d[:, 1]))
+            pc1_range = float(np.max(neighbors_2d[:, 0]) - np.min(neighbors_2d[:, 0]))
+            max_sigma = float(max(sigmas)) if sigmas else float(SCALE_WEIGHT)
+            zoom_mid  = 0.10 * pc1_range if pc1_range > 0 else max_sigma
+            zoom_tight = max_sigma
+            return pc1_std, pc2_std, max_sigma, zoom_mid, zoom_tight
+
+        def _apply_zoom_limits_vo(ax, zr, anchor_2d, neighbors_2d):
+            if zr is None:
+                x_all = np.concatenate([neighbors_2d[:, 0], [anchor_2d[0]]])
+                y_all = np.concatenate([neighbors_2d[:, 1], [anchor_2d[1]]])
+                pad   = 0.05 * max(float(x_all.max()-x_all.min()), float(y_all.max()-y_all.min()), 1e-6)
+                ax.set_xlim(float(x_all.min())-pad, float(x_all.max())+pad)
+                ax.set_ylim(float(y_all.min())-pad, float(y_all.max())+pad)
+            else:
+                ax.set_xlim(float(anchor_2d[0])-zr, float(anchor_2d[0])+zr)
+                ax.set_ylim(float(anchor_2d[1])-zr, float(anchor_2d[1])+zr)
+
+        def _save_iso_overlay_vo(neighbors_2d, anchor_2d, sample_points_2d, sigmas, save_path):
+            neighbors_2d     = np.asarray(neighbors_2d,     dtype=np.float64)
+            anchor_2d        = np.asarray(anchor_2d,        dtype=np.float64)
+            sample_points_2d = np.asarray(sample_points_2d, dtype=np.float64)
+            if neighbors_2d.shape[0] == 0:
+                return
+            pc1_std, pc2_std, max_sigma, zoom_mid, zoom_tight = _zoom_setup_vo(neighbors_2d, sigmas)
+            sigma_colors = [C['iso_circle']] * max(len(sigmas), 1)
+            zoom_configs = [
+                (None,       f"(a) Full noise cloud   σ/std={max_sigma/(pc1_std+1e-12):.2f}"),
+                (zoom_mid,   f"(b) Mid-zoom  ±{zoom_mid:.3f}"),
+                (zoom_tight, f"(c) Tight zoom  ±σ={zoom_tight:.3f}"),
+            ]
+            fig_i, axs_i = plt.subplots(1, 3, figsize=(16, 5.5), facecolor='white')
+            for ax, (zr, title) in zip(axs_i, zoom_configs):
+                ax.scatter(neighbors_2d[:, 0], neighbors_2d[:, 1], c=C['knn'], s=6,
+                           alpha=0.28, linewidths=0, zorder=1, label='KNN neighbors')
+                if sample_points_2d.size > 0:
+                    ax.scatter(sample_points_2d[:, 0], sample_points_2d[:, 1],
+                               c=C['lat_iso'], s=9, alpha=0.35, linewidths=0, zorder=2,
+                               label='Iso noisy samples')
+                for si, sigma in enumerate(sigmas):
+                    ax.add_patch(plt.Circle(
+                        (float(anchor_2d[0]), float(anchor_2d[1])), float(sigma),
+                        fill=False, edgecolor=sigma_colors[si], linewidth=2.0,
+                        linestyle=(0, (4, 2)), alpha=0.95, zorder=4,
+                        label=f'Iso circle r=σ={sigma:.3f}' if si == 0 else None,
+                    ))
+                ax.scatter(float(anchor_2d[0]), float(anchor_2d[1]), c=C['anchor'], s=170,
+                           marker='*', edgecolors='#444', linewidths=0.8, zorder=6, label='Anchor')
+                _apply_zoom_limits_vo(ax, zr, anchor_2d, neighbors_2d)
+                ax.set_aspect('equal')
+                ax.set_title(title, fontsize=8.5)
+                ax.set_xlabel(f'PC1 (cloud std={pc1_std:.2f})')
+                ax.set_ylabel(f'PC2 (cloud std={pc2_std:.2f})')
+                ax.grid(alpha=0.3)
+                ax.legend(fontsize=7, loc='upper right')
+            fig_i.suptitle(
+                f"Isotropic Smoothing Geometry   σ={SCALE_WEIGHT}   MC={N_SMOOTH_SAMPLES}",
+                fontsize=11, fontweight='bold', y=1.03,
+            )
+            plt.tight_layout()
+            plt.savefig(save_path, dpi=180, bbox_inches='tight')
+            plt.close(fig_i)
+
+        def _save_manifold_overlay_vo(neighbors_2d, anchor_2d, sample_points_2d,
+                                      evals_norm_2d, sigmas, save_path, evals_full_norm=None):
+            neighbors_2d     = np.asarray(neighbors_2d,     dtype=np.float64)
+            anchor_2d        = np.asarray(anchor_2d,        dtype=np.float64)
+            sample_points_2d = np.asarray(sample_points_2d, dtype=np.float64)
+            if neighbors_2d.shape[0] == 0:
+                return
+            pc1_std, pc2_std, max_sigma, zoom_mid, zoom_tight = _zoom_setup_vo(neighbors_2d, sigmas)
+            if evals_full_norm is not None and len(evals_full_norm) > 0:
+                mid_idx      = len(evals_full_norm) // 2
+                ev_mid_norm  = float(evals_full_norm[mid_idx])
+                ev_last_norm = float(evals_full_norm[-1])
+                n_last       = len(evals_full_norm) - 1
+            else:
+                mid_idx      = 0
+                ev_mid_norm  = float(evals_norm_2d[-1]) if len(evals_norm_2d) > 1 else 1.0
+                ev_last_norm = ev_mid_norm
+                n_last       = '?'
+            a_mid  = max_sigma * float(np.sqrt(max(ev_mid_norm,  0.0)))
+            a_last = max_sigma * float(np.sqrt(max(ev_last_norm, 0.0)))
+            zoom_configs = [
+                (None,       f"(a) Full neighbourhood cloud"),
+                (zoom_mid,   f"(b) Mid-zoom  ±{zoom_mid:.2f}"),
+                (zoom_tight, f"(c) Ellipse axes  a₁={max_sigma:.3f}  a₂={max_sigma*float(np.sqrt(max(evals_norm_2d[1],0))) if len(evals_norm_2d)>1 else 0:.3f}"),
+                (zoom_tight, f"(d) Mid axis  a_mid={a_mid:.3f}  a_mid/a₁={a_mid/(max_sigma+1e-12):.3f}"),
+                (zoom_tight, f"(e) Last axis  a_last={a_last:.2e}  a_last/a₁={a_last/(max_sigma+1e-12):.2e}"),
+            ]
+            _n_sigmas    = max(len(sigmas), 1)
+            sigma_alphas = np.linspace(0.5, 0.95, _n_sigmas)
+            fig_m, axs_m = plt.subplots(1, 5, figsize=(27, 5.5), facecolor='white')
+            for panel_idx, (ax, (zr, panel_title)) in enumerate(zip(axs_m, zoom_configs)):
+                ax.scatter(neighbors_2d[:, 0], neighbors_2d[:, 1], c=C['knn'], s=6,
+                           alpha=0.28, linewidths=0, zorder=1, label='KNN neighbors')
+                if sample_points_2d.size > 0:
+                    ax.scatter(sample_points_2d[:, 0], sample_points_2d[:, 1],
+                               c=C['mc'], s=9, alpha=0.35, linewidths=0, zorder=2,
+                               label='Manifold noisy samples')
+                for si, sigma in enumerate(sigmas):
+                    axes_2d = axis_lengths(sigma, evals_norm_2d)
+                    ax.add_patch(plt.Circle(
+                        (float(anchor_2d[0]), float(anchor_2d[1])), float(sigma),
+                        fill=False, edgecolor=C['iso_circle'], linewidth=1.8,
+                        linestyle=(0, (4, 2)), alpha=float(sigma_alphas[si]), zorder=4,
+                        label=f'Iso circle r=σ={sigma:.3f}' if si == 0 else None,
+                    ))
+                    if len(axes_2d) >= 2:
+                        if panel_idx == 3:
+                            ell_h   = float(2 * a_mid)
+                            ell_lbl = f'Ellipse a1={axes_2d[0]:.4f} a_mid={a_mid:.4f}'
+                        elif panel_idx == 4:
+                            ell_h   = float(2 * a_last)
+                            ell_lbl = f'Ellipse a1={axes_2d[0]:.4f} a_last={a_last:.4f}'
+                        else:
+                            ell_h   = float(2 * axes_2d[1])
+                            ell_lbl = f'Ellipse a1={axes_2d[0]:.4f} a2={axes_2d[1]:.4f}'
+                        ax.add_patch(Ellipse(
+                            (float(anchor_2d[0]), float(anchor_2d[1])),
+                            width=float(2 * axes_2d[0]), height=ell_h,
+                            fill=False, edgecolor=C['mani_ellipse'], linewidth=1.8,
+                            linestyle='solid', alpha=float(sigma_alphas[si]), zorder=4,
+                            label=ell_lbl if si == 0 else None,
+                        ))
+                ax.scatter(float(anchor_2d[0]), float(anchor_2d[1]), c=C['anchor'], s=170,
+                           marker='*', edgecolors='#444', linewidths=0.8, zorder=6, label='Anchor')
+                _apply_zoom_limits_vo(ax, zr, anchor_2d, neighbors_2d)
+                ax.set_aspect('equal')
+                ax.set_title(panel_title, fontsize=8.5)
+                ax.set_xlabel(f'PC1 (cloud std={pc1_std:.2f})')
+                ax.set_ylabel(f'PC2 (cloud std={pc2_std:.2f})')
+                ax.grid(alpha=0.3)
+                ax.legend(fontsize=7, loc='upper right')
+            legend_handles_m = [
+                plt.Line2D([0], [0], color=C['iso_circle'], lw=1.8, linestyle=(0, (4, 2)), label='Iso circle r=σ'),
+                plt.Line2D([0], [0], color=C['mani_ellipse'], lw=1.8, linestyle='solid', label='Manifold ellipse'),
+                plt.Line2D([0], [0], marker='o', color='w', markerfacecolor=C['mc'],
+                           markersize=7, label='Manifold noisy samples'),
+                plt.Line2D([0], [0], marker='*', color='w', markerfacecolor=C['anchor'],
+                           markeredgecolor='#444', markersize=10, label='Anchor'),
+            ]
+            fig_m.legend(handles=legend_handles_m, loc='lower center', ncol=4, fontsize=8,
+                         frameon=True, framealpha=0.95, edgecolor='#cccccc', bbox_to_anchor=(0.5, -0.03))
+            fig_m.suptitle(
+                f"Manifold Smoothing Geometry   σ={SCALE_WEIGHT}\n"
+                f"λ_max={lambda_max:.4f}   √λ_max={sqrt_lambda_max:.4f}   α={alpha:.4f}",
+                fontsize=11, fontweight='bold', y=1.03,
+            )
+            plt.tight_layout(rect=[0, 0.08, 1, 1])
+            plt.savefig(save_path, dpi=180, bbox_inches='tight')
+            plt.close(fig_m)
+
+        # ── geometry overlays ─────────────────────────────────────────────
+        _save_manifold_overlay_vo(
+            X_vis, orig_vis, noisy_vis,
+            ev_vis_norm, VIZ_SIGMAS,
+            os.path.join(manifold_dir, f"idx{target_idx}_circle_ellipse.png"),
+            evals_full_norm=ev_full_norm,
+        )
+        _save_iso_overlay_vo(
+            X_vis, orig_vis, gauss_vis, VIZ_SIGMAS,
+            os.path.join(isotropic_dir, f"idx{target_idx}_circle_ellipse.png"),
+        )
+
+        # ── manifold bar chart ────────────────────────────────────────────
+        n_show = 20
+        smooth_top_idxs = np.argsort(-cv_smoothed_avg)[:n_show]
+        top_names_vo    = [(concept_names[i] if concept_names else f"c_{i}") for i in smooth_top_idxs]
+        top_orig_vals   = [float(cv_orig[i])         for i in smooth_top_idxs]
+        top_smooth_vals = [float(cv_smoothed_avg[i]) for i in smooth_top_idxs]
+
+        active_mask_m  = cv_orig > 1e-6
+        active_idxs_m  = np.where(active_mask_m)[0]
+        least_idxs_m   = sorted(active_idxs_m, key=lambda i: cv_smoothed_avg[i])[:n_show]
+        least_names_m  = [(concept_names[i] if concept_names else f"c_{i}") for i in least_idxs_m]
+        least_orig_m   = [float(cv_orig[i])         for i in least_idxs_m]
+        least_smooth_m = [float(cv_smoothed_avg[i]) for i in least_idxs_m]
+
+        shared_xlim_m = max(top_orig_vals + top_smooth_vals + least_orig_m + least_smooth_m) * 1.08
+        fig_bm, axes_bm = plt.subplots(1, 2, figsize=(18, 8))
+        y = np.arange(n_show)
+
+        ax = axes_bm[0]
+        ax.barh(y - 0.2, top_orig_vals[::-1],   height=0.35, color=C['overall'],  label='Original',     alpha=0.8)
+        ax.barh(y + 0.2, top_smooth_vals[::-1],  height=0.35, color=C['manifold'], label='Manifold avg', alpha=0.8)
+        ax.set_yticks(y); ax.set_yticklabels([n[:25] for n in top_names_vo[::-1]], fontsize=8)
+        ax.set_xlim(0, shared_xlim_m); ax.set_xlabel('Activation')
+        ax.set_title(f'Top Activated  [{get_class_name(PROBE_DATASET, pred_orig)} → '
+                     f'{get_class_name(PROBE_DATASET, pred_smooth)} '
+                     f'{"STABLE ✓" if pred_orig == pred_smooth else "CHANGED ✗"}]',
+                     fontsize=10, fontweight='bold')
+        ax.legend(fontsize=8); ax.grid(True, axis='x', alpha=0.3)
+
+        ax = axes_bm[1]
+        ax.barh(y - 0.2, least_orig_m[::-1],   height=0.35, color=C['overall'],  label='Original',     alpha=0.8)
+        ax.barh(y + 0.2, least_smooth_m[::-1],  height=0.35, color=C['manifold'], label='Manifold avg', alpha=0.8)
+        ax.set_yticks(y); ax.set_yticklabels([n[:25] for n in least_names_m[::-1]], fontsize=8)
+        ax.set_xlim(0, shared_xlim_m); ax.set_xlabel('Activation')
+        ax.set_title('Least Activated (originally active, sorted by smoothed score)',
+                     fontsize=10, fontweight='bold')
+        ax.legend(fontsize=8); ax.grid(True, axis='x', alpha=0.3)
+
+        fig_bm.suptitle(
+            f'Manifold Smoothing   σ={SCALE_WEIGHT}\n'
+            f'True: {get_class_name(PROBE_DATASET, label_true)}   '
+            f'Predicted: {get_class_name(PROBE_DATASET, pred_smooth)}',
+            fontsize=11, fontweight='bold')
+        plt.tight_layout()
+        plt.savefig(os.path.join(manifold_dir, f"idx{target_idx}_top_least_activation.png"),
+                    dpi=150, bbox_inches='tight')
+        plt.close(fig_bm)
+
+        # ── isotropic bar chart ───────────────────────────────────────────
+        gauss_top_idxs  = np.argsort(-cv_gauss_avg)[:n_show]
+        g_top_names_vo  = [(concept_names[i] if concept_names else f"c_{i}") for i in gauss_top_idxs]
+        g_top_orig_vals   = [float(cv_orig[i])      for i in gauss_top_idxs]
+        g_top_smooth_vals = [float(cv_gauss_avg[i]) for i in gauss_top_idxs]
+
+        active_mask_g  = cv_orig > 1e-6
+        active_idxs_g  = np.where(active_mask_g)[0]
+        least_idxs_g   = sorted(active_idxs_g, key=lambda i: cv_gauss_avg[i])[:n_show]
+        least_names_g  = [(concept_names[i] if concept_names else f"c_{i}") for i in least_idxs_g]
+        least_orig_g   = [float(cv_orig[i])      for i in least_idxs_g]
+        least_smooth_g = [float(cv_gauss_avg[i]) for i in least_idxs_g]
+
+        shared_xlim_g = max(g_top_orig_vals + g_top_smooth_vals + least_orig_g + least_smooth_g) * 1.08
+        fig_bg, axes_bg = plt.subplots(1, 2, figsize=(18, 8))
+        y = np.arange(n_show)
+
+        ax = axes_bg[0]
+        ax.barh(y - 0.2, g_top_orig_vals[::-1],   height=0.35, color=C['overall'],   label='Original',      alpha=0.8)
+        ax.barh(y + 0.2, g_top_smooth_vals[::-1],  height=0.35, color=C['isotropic'], label='Isotropic avg', alpha=0.8)
+        ax.set_yticks(y); ax.set_yticklabels([n[:25] for n in g_top_names_vo[::-1]], fontsize=8)
+        ax.set_xlim(0, shared_xlim_g); ax.set_xlabel('Activation')
+        ax.set_title(f'Top Activated  [{get_class_name(PROBE_DATASET, pred_orig)} → '
+                     f'{get_class_name(PROBE_DATASET, pred_gauss)} '
+                     f'{"STABLE ✓" if pred_orig == pred_gauss else "CHANGED ✗"}]',
+                     fontsize=10, fontweight='bold')
+        ax.legend(fontsize=8); ax.grid(True, axis='x', alpha=0.3)
+
+        ax = axes_bg[1]
+        ax.barh(y - 0.2, least_orig_g[::-1],   height=0.35, color=C['overall'],   label='Original',      alpha=0.8)
+        ax.barh(y + 0.2, least_smooth_g[::-1],  height=0.35, color=C['isotropic'], label='Isotropic avg', alpha=0.8)
+        ax.set_yticks(y); ax.set_yticklabels([n[:25] for n in least_names_g[::-1]], fontsize=8)
+        ax.set_xlim(0, shared_xlim_g); ax.set_xlabel('Activation')
+        ax.set_title('Least Activated (originally active, sorted by smoothed score)',
+                     fontsize=10, fontweight='bold')
+        ax.legend(fontsize=8); ax.grid(True, axis='x', alpha=0.3)
+
+        fig_bg.suptitle(
+            f'Manifold Smoothing   σ={SCALE_WEIGHT}\n'
+            f'True: {get_class_name(PROBE_DATASET, label_true)}   '
+            f'Predicted: {get_class_name(PROBE_DATASET, pred_gauss)}',
+            fontsize=11, fontweight='bold')
+        plt.tight_layout()
+        plt.savefig(os.path.join(isotropic_dir, f"idx{target_idx}_top_least_activation.png"),
+                    dpi=150, bbox_inches='tight')
+        plt.close(fig_bg)
+
+        # ── decode NN figures ─────────────────────────────────────────────
+        if sae_clip_gallery is not None or true_clip_gallery is not None:
+            cv_noisy_m = (cv_whitened + np.random.normal(0, alpha, size=len(ev))) @ (np.sqrt(ev)[:, None] * Vt) + mean_nn
+            save_decode_nn_figure(
+                target_idx, cv_orig, cv_noisy_m, round(SCALE_WEIGHT, 3),
+                val_labels, probe_val_dataset,
+                sae_clip_gallery, true_clip_gallery, 'Manifold Smoothing',
+                os.path.join(manifold_dir, f"idx{target_idx}_decode_nn.png"))
+            cv_noisy_g = cv_orig + np.random.normal(0, gauss_sigma, size=cv_orig.shape)
+            save_decode_nn_figure(
+                target_idx, cv_orig, cv_noisy_g, round(float(gauss_sigma), 3),
+                val_labels, probe_val_dataset,
+                sae_clip_gallery, true_clip_gallery, 'Isotropic Smoothing',
+                os.path.join(isotropic_dir, f"idx{target_idx}_decode_nn.png"))
+
+        print(f"  Saved viz for idx {target_idx} (VIZ_ONLY)", flush=True)
+        viz_count += 1
+
+    print(f"\nVIZ-ONLY done. Regenerated viz for {viz_count} targets.", flush=True)
+
+# ===========================================================================
+# Normal smoothing computation loop (skipped when VIZ_ONLY=1)
+# ===========================================================================
+for loop_i, target_idx in enumerate(TARGET_IDCS if not VIZ_ONLY else []):
     # Skip already-completed targets (resume after OOM/restart)
     if target_idx in completed_idxs:
         if (loop_i + 1) % 50 == 0:
@@ -1254,19 +1683,19 @@ for loop_i, target_idx in enumerate(TARGET_IDCS):
             if neighbors_2d.shape[0] == 0:
                 return
             pc1_std, pc2_std, max_sigma, zoom_mid, zoom_tight = _zoom_setup(neighbors_2d, sigmas)
-            sigma_colors = plt.cm.Blues(np.linspace(0.45, 0.9, max(len(sigmas), 1)))
+            sigma_colors = [C['iso_circle']] * max(len(sigmas), 1)
             zoom_configs = [
-                (None,       f"[A] Full cloud\nPC1 std={pc1_std:.3f}  σ/std={max_sigma/(pc1_std+1e-12):.4f}"),
-                (zoom_mid,   f"[B] Mid-zoom ±{zoom_mid:.3f}\n(10% of cloud)"),
-                (zoom_tight, f"[C] Tight ±σ={zoom_tight:.4f}"),
+                (None,       f"(a) Full noise cloud   σ/std={max_sigma/(pc1_std+1e-12):.2f}"),
+                (zoom_mid,   f"(b) Mid-zoom  ±{zoom_mid:.3f}"),
+                (zoom_tight, f"(c) Tight zoom  ±σ={zoom_tight:.3f}"),
             ]
             fig_i, axs_i = plt.subplots(1, 3, figsize=(16, 5.5), facecolor='white')
             for ax, (zr, title) in zip(axs_i, zoom_configs):
-                ax.scatter(neighbors_2d[:, 0], neighbors_2d[:, 1], c='#d0d0d0', s=6,
+                ax.scatter(neighbors_2d[:, 0], neighbors_2d[:, 1], c=C['knn'], s=6,
                            alpha=0.28, linewidths=0, zorder=1, label='KNN neighbors')
                 if sample_points_2d.size > 0:
                     ax.scatter(sample_points_2d[:, 0], sample_points_2d[:, 1],
-                               c='#4f8bc9', s=9, alpha=0.35, linewidths=0, zorder=2,
+                               c=C['lat_iso'], s=9, alpha=0.35, linewidths=0, zorder=2,
                                label='Iso noisy samples')
                 for si, sigma in enumerate(sigmas):
                     ax.add_patch(plt.Circle(
@@ -1275,7 +1704,7 @@ for loop_i, target_idx in enumerate(TARGET_IDCS):
                         linestyle=(0, (4, 2)), alpha=0.95, zorder=4,
                         label=f'Iso circle r=σ={sigma:.3f}' if si == 0 else None,
                     ))
-                ax.scatter(float(anchor_2d[0]), float(anchor_2d[1]), c='#f5c518', s=170,
+                ax.scatter(float(anchor_2d[0]), float(anchor_2d[1]), c=C['anchor'], s=170,
                            marker='*', edgecolors='#444', linewidths=0.8, zorder=6, label='Anchor')
                 _apply_zoom_limits(ax, zr, anchor_2d, neighbors_2d)
                 ax.set_aspect('equal')
@@ -1285,8 +1714,7 @@ for loop_i, target_idx in enumerate(TARGET_IDCS):
                 ax.grid(alpha=0.3)
                 ax.legend(fontsize=7, loc='upper right')
             fig_i.suptitle(
-                f"Isotropic: Circle Geometry (idx={target_idx})\n"
-                f"σ list={sigmas}  |  K={K_NEIGHBORS}  |  PC1 std={pc1_std:.3f}",
+                f"Isotropic Smoothing Geometry   σ={SCALE_WEIGHT}   MC={N_SMOOTH_SAMPLES}",
                 fontsize=11, fontweight='bold', y=1.03,
             )
             plt.tight_layout()
@@ -1315,28 +1743,28 @@ for loop_i, target_idx in enumerate(TARGET_IDCS):
             a_mid  = max_sigma * float(np.sqrt(max(ev_mid_norm,  0.0)))
             a_last = max_sigma * float(np.sqrt(max(ev_last_norm, 0.0)))
             zoom_configs = [
-                (None,       f"[A] Full cloud\nPC1 std={pc1_std:.3f}  σ/std={max_sigma/(pc1_std+1e-12):.4f}"),
-                (zoom_mid,   f"[B] Mid-zoom ±{zoom_mid:.3f}\n(10% of cloud)  PC2 std={pc2_std:.3f}"),
-                (zoom_tight, f"[C] Tight ±σ={zoom_tight:.4f}\nCircle fills frame, ellipse (a2) inside"),
-                (zoom_tight, f"[D] Mid PC (k={mid_idx})  a_mid={a_mid:.4f}\na_mid/a1={a_mid/(max_sigma+1e-12):.4f}"),
-                (zoom_tight, f"[E] Last PC (k={n_last})  a_last={a_last:.6f}\na_last/a1={a_last/(max_sigma+1e-12):.6f}"),
+                (None,       f"(a) Full neighbourhood cloud"),
+                (zoom_mid,   f"(b) Mid-zoom  ±{zoom_mid:.2f}"),
+                (zoom_tight, f"(c) Ellipse axes  a₁={max_sigma:.3f}  a₂={max_sigma*float(np.sqrt(max(evals_norm_2d[1],0))) if len(evals_norm_2d)>1 else 0:.3f}"),
+                (zoom_tight, f"(d) Mid axis  a_mid={a_mid:.3f}  a_mid/a₁={a_mid/(max_sigma+1e-12):.3f}"),
+                (zoom_tight, f"(e) Last axis  a_last={a_last:.2e}  a_last/a₁={a_last/(max_sigma+1e-12):.2e}"),
             ]
-            sigma_colors = plt.cm.viridis(np.linspace(0.15, 0.95, max(len(sigmas), 1)))
+            _n_sigmas = max(len(sigmas), 1)
+            sigma_alphas = np.linspace(0.5, 0.95, _n_sigmas)
             fig_m, axs_m = plt.subplots(1, 5, figsize=(27, 5.5), facecolor='white')
             for panel_idx, (ax, (zr, panel_title)) in enumerate(zip(axs_m, zoom_configs)):
-                ax.scatter(neighbors_2d[:, 0], neighbors_2d[:, 1], c='#d0d0d0', s=6,
+                ax.scatter(neighbors_2d[:, 0], neighbors_2d[:, 1], c=C['knn'], s=6,
                            alpha=0.28, linewidths=0, zorder=1, label='KNN neighbors')
                 if sample_points_2d.size > 0:
                     ax.scatter(sample_points_2d[:, 0], sample_points_2d[:, 1],
-                               c='#6abf69', s=9, alpha=0.35, linewidths=0, zorder=2,
+                               c=C['mc'], s=9, alpha=0.35, linewidths=0, zorder=2,
                                label='Manifold noisy samples')
                 for si, sigma in enumerate(sigmas):
-                    color   = sigma_colors[si]
                     axes_2d = axis_lengths(sigma, evals_norm_2d)
                     ax.add_patch(plt.Circle(
                         (float(anchor_2d[0]), float(anchor_2d[1])), float(sigma),
-                        fill=False, edgecolor=color, linewidth=1.8,
-                        linestyle=(0, (4, 2)), alpha=0.9, zorder=4,
+                        fill=False, edgecolor=C['iso_circle'], linewidth=1.8,
+                        linestyle=(0, (4, 2)), alpha=float(sigma_alphas[si]), zorder=4,
                         label=f'Iso circle r=σ={sigma:.3f}' if si == 0 else None,
                     ))
                     if len(axes_2d) >= 2:
@@ -1352,11 +1780,11 @@ for loop_i, target_idx in enumerate(TARGET_IDCS):
                         ax.add_patch(Ellipse(
                             (float(anchor_2d[0]), float(anchor_2d[1])),
                             width=float(2 * axes_2d[0]), height=ell_h,
-                            fill=False, edgecolor=color, linewidth=1.8,
-                            linestyle='solid', alpha=0.9, zorder=4,
+                            fill=False, edgecolor=C['mani_ellipse'], linewidth=1.8,
+                            linestyle='solid', alpha=float(sigma_alphas[si]), zorder=4,
                             label=ell_lbl if si == 0 else None,
                         ))
-                ax.scatter(float(anchor_2d[0]), float(anchor_2d[1]), c='#f5c518', s=170,
+                ax.scatter(float(anchor_2d[0]), float(anchor_2d[1]), c=C['anchor'], s=170,
                            marker='*', edgecolors='#444', linewidths=0.8, zorder=6, label='Anchor')
                 _apply_zoom_limits(ax, zr, anchor_2d, neighbors_2d)
                 ax.set_aspect('equal')
@@ -1366,20 +1794,18 @@ for loop_i, target_idx in enumerate(TARGET_IDCS):
                 ax.grid(alpha=0.3)
                 ax.legend(fontsize=7, loc='upper right')
             legend_handles_m = [
-                plt.Line2D([0], [0], color='black', lw=1.8, linestyle=(0, (4, 2)), label='Iso circle r=σ'),
-                plt.Line2D([0], [0], color='black', lw=1.8, linestyle='solid',      label='Manifold ellipse'),
-                plt.Line2D([0], [0], marker='o', color='w', markerfacecolor='#6abf69',
+                plt.Line2D([0], [0], color=C['iso_circle'], lw=1.8, linestyle=(0, (4, 2)), label='Iso circle r=σ'),
+                plt.Line2D([0], [0], color=C['mani_ellipse'], lw=1.8, linestyle='solid', label='Manifold ellipse'),
+                plt.Line2D([0], [0], marker='o', color='w', markerfacecolor=C['mc'],
                            markersize=7, label='Manifold noisy samples'),
-                plt.Line2D([0], [0], marker='*', color='w', markerfacecolor='#f5c518',
+                plt.Line2D([0], [0], marker='*', color='w', markerfacecolor=C['anchor'],
                            markeredgecolor='#444', markersize=10, label='Anchor'),
             ]
             fig_m.legend(handles=legend_handles_m, loc='lower center', ncol=4, fontsize=8,
                          frameon=True, framealpha=0.95, edgecolor='#cccccc', bbox_to_anchor=(0.5, -0.03))
             fig_m.suptitle(
-                f"Manifold: Circle + Ellipse Geometry (idx={target_idx})  |  "
-                f"λ_max={lambda_max:.4f}  √λ_max={sqrt_lambda_max:.4f}  |  "
-                f"α=σ/√λ_max={alpha:.4f}  (α/σ={alpha/max(max_sigma,1e-12):.4f})\n"
-                f"σ list={sigmas}  |  K={K_NEIGHBORS}  |  PC1 std={pc1_std:.3f}",
+                f"Manifold Smoothing Geometry   σ={SCALE_WEIGHT}\n"
+                f"λ_max={lambda_max:.4f}   √λ_max={sqrt_lambda_max:.4f}   α={alpha:.4f}",
                 fontsize=11, fontweight='bold', y=1.03,
             )
             plt.tight_layout(rect=[0, 0.08, 1, 1])
@@ -1415,8 +1841,8 @@ for loop_i, target_idx in enumerate(TARGET_IDCS):
         y = np.arange(n_show)
 
         ax = axes_m[0]
-        ax.barh(y - 0.2, top_orig_vals[::-1],   height=0.35, color='steelblue', label='Original',     alpha=0.8)
-        ax.barh(y + 0.2, top_smooth_vals[::-1],  height=0.35, color='coral',     label='Manifold avg', alpha=0.8)
+        ax.barh(y - 0.2, top_orig_vals[::-1],   height=0.35, color=C['overall'],  label='Original',     alpha=0.8)
+        ax.barh(y + 0.2, top_smooth_vals[::-1],  height=0.35, color=C['manifold'], label='Manifold avg', alpha=0.8)
         ax.set_yticks(y); ax.set_yticklabels([n[:25] for n in top_names[::-1]], fontsize=8)
         ax.set_xlim(0, shared_xlim_m); ax.set_xlabel('Activation')
         ax.set_title(f'Top Activated  [{get_class_name(PROBE_DATASET, pred_orig)} → '
@@ -1426,20 +1852,19 @@ for loop_i, target_idx in enumerate(TARGET_IDCS):
         ax.legend(fontsize=8); ax.grid(True, axis='x', alpha=0.3)
 
         ax = axes_m[1]
-        ax.barh(y - 0.2, least_orig_m[::-1],   height=0.35, color='steelblue', label='Original',     alpha=0.8)
-        ax.barh(y + 0.2, least_smooth_m[::-1],  height=0.35, color='coral',     label='Manifold avg', alpha=0.8)
+        ax.barh(y - 0.2, least_orig_m[::-1],   height=0.35, color=C['overall'],  label='Original',     alpha=0.8)
+        ax.barh(y + 0.2, least_smooth_m[::-1],  height=0.35, color=C['manifold'], label='Manifold avg', alpha=0.8)
         ax.set_yticks(y); ax.set_yticklabels([n[:25] for n in least_names_m[::-1]], fontsize=8)
         ax.set_xlim(0, shared_xlim_m); ax.set_xlabel('Activation')
         ax.set_title('Least Activated (originally active, sorted by smoothed score)',
                      fontsize=10, fontweight='bold')
         ax.legend(fontsize=8); ax.grid(True, axis='x', alpha=0.3)
 
+        _true_class_m  = get_class_name(PROBE_DATASET, label_true)
+        _pred_smooth_class_m = get_class_name(PROBE_DATASET, pred_smooth)
         fig_m.suptitle(
-            f'Manifold Smoothing — idx={target_idx}  σ={SCALE_WEIGHT}\n'
-            f'True: {get_class_name(PROBE_DATASET, label_true)}  |  '
-            f'Orig pred: {get_class_name(PROBE_DATASET, pred_orig)}  |  '
-            f'Smoothed pred: {get_class_name(PROBE_DATASET, pred_smooth)}  '
-            f'[{"STABLE ✓" if pred_orig == pred_smooth else "CHANGED ✗"}]',
+            f'Manifold Smoothing   σ={SCALE_WEIGHT}\n'
+            f'True: {_true_class_m}   Predicted: {_pred_smooth_class_m}',
             fontsize=11, fontweight='bold')
         plt.tight_layout()
         plt.savefig(os.path.join(manifold_dir, f"idx{target_idx}_top_least_activation.png"),
@@ -1536,8 +1961,8 @@ for loop_i, target_idx in enumerate(TARGET_IDCS):
         y = np.arange(n_show)
 
         ax = axes_g[0]
-        ax.barh(y - 0.2, g_top_orig_vals[::-1],   height=0.35, color='steelblue', label='Original',      alpha=0.8)
-        ax.barh(y + 0.2, g_top_smooth_vals[::-1],  height=0.35, color='#FF9800',   label='Isotropic avg', alpha=0.8)
+        ax.barh(y - 0.2, g_top_orig_vals[::-1],   height=0.35, color=C['overall'],   label='Original',      alpha=0.8)
+        ax.barh(y + 0.2, g_top_smooth_vals[::-1],  height=0.35, color=C['isotropic'], label='Isotropic avg', alpha=0.8)
         ax.set_yticks(y); ax.set_yticklabels([n[:25] for n in g_top_names[::-1]], fontsize=8)
         ax.set_xlim(0, shared_xlim_g); ax.set_xlabel('Activation')
         ax.set_title(f'Top Activated  [{get_class_name(PROBE_DATASET, pred_orig)} → '
@@ -1547,20 +1972,19 @@ for loop_i, target_idx in enumerate(TARGET_IDCS):
         ax.legend(fontsize=8); ax.grid(True, axis='x', alpha=0.3)
 
         ax = axes_g[1]
-        ax.barh(y - 0.2, least_orig_g[::-1],   height=0.35, color='steelblue', label='Original',      alpha=0.8)
-        ax.barh(y + 0.2, least_smooth_g[::-1],  height=0.35, color='#FF9800',   label='Isotropic avg', alpha=0.8)
+        ax.barh(y - 0.2, least_orig_g[::-1],   height=0.35, color=C['overall'],   label='Original',      alpha=0.8)
+        ax.barh(y + 0.2, least_smooth_g[::-1],  height=0.35, color=C['isotropic'], label='Isotropic avg', alpha=0.8)
         ax.set_yticks(y); ax.set_yticklabels([n[:25] for n in least_names_g[::-1]], fontsize=8)
         ax.set_xlim(0, shared_xlim_g); ax.set_xlabel('Activation')
         ax.set_title('Least Activated (originally active, sorted by smoothed score)',
                      fontsize=10, fontweight='bold')
         ax.legend(fontsize=8); ax.grid(True, axis='x', alpha=0.3)
 
+        _true_class_g  = get_class_name(PROBE_DATASET, label_true)
+        _pred_gauss_class_g = get_class_name(PROBE_DATASET, pred_gauss)
         fig_g.suptitle(
-            f'Isotropic Smoothing — idx={target_idx}  σ={gauss_sigma}\n'
-            f'True: {get_class_name(PROBE_DATASET, label_true)}  |  '
-            f'Orig pred: {get_class_name(PROBE_DATASET, pred_orig)}  |  '
-            f'Smoothed pred: {get_class_name(PROBE_DATASET, pred_gauss)}  '
-            f'[{"STABLE ✓" if pred_orig == pred_gauss else "CHANGED ✗"}]',
+            f'Manifold Smoothing   σ={SCALE_WEIGHT}\n'
+            f'True: {_true_class_g}   Predicted: {_pred_gauss_class_g}',
             fontsize=11, fontweight='bold')
         plt.tight_layout()
         plt.savefig(os.path.join(isotropic_dir, f"idx{target_idx}_top_least_activation.png"),
@@ -2070,7 +2494,8 @@ print(f"  r_iso  (Gaussian cert radius): mean={_safe_mean(r_isos):.4f}, "
 print(f"  r_mani (Manifold cert radius): mean={_safe_mean(r_manis):.4f}, "
       f"median={_safe_median(r_manis):.4f}, >0: {sum(1 for r in r_manis if r > 0)}/{n}")
 mean_k = np.mean([r.get('n_eigenvalues', 0) for r in results])
-print(f"  Effective manifold dim: mean k={mean_k:.1f} / D={len(cv_orig)}")
+_concept_dim_summary = int(val_concept_vectors.shape[1])
+print(f"  Effective manifold dim: mean k={mean_k:.1f} / D={_concept_dim_summary}")
 
 print(f"\n{'Quantity':<25s} {'Mean':<12s} {'Median':<12s} {'Std':<12s} {'#Finite':<10s}")
 print(f"{'-'*71}")
