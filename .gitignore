@@ -6,4 +6,6 @@ output/
 venv/
 smoothing_data/
 **/*.pt
-
+notebooks_smoothing_test/*.png
+notebooks_smoothing_test/*.csv
+notebooks_smoothing_test/*.JPEG
