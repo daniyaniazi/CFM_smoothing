@@ -59,18 +59,33 @@ plt.rcParams.update({
 })
 
 C = {
-    'manifold':     '#f5c518',
-    'isotropic':    '#2166ac',
-    'lat_manifold': '#74c476',
-    'lat_iso':      '#aec7e8',
+    # geometry plots (circle/ellipse)
+    'manifold':     '#f5c518',   # yellow/gold  — manifold ellipse
+    'isotropic':    '#2166ac',   # deep blue    — iso circle
+    'lat_manifold': '#74c476',   # green        — MC samples
+    'lat_iso':      '#aec7e8',   # light blue   — iso samples
     'positive':     '#1b7837',
     'negative':     '#762a83',
-    'overall':      '#636363',
     'mc':           '#74c476',
     'iso_circle':   '#2166ac',
     'mani_ellipse': '#f5c518',
     'knn':          '#aec7e8',
     'anchor':       'black',
+    # concept bars
+    'overall':      '#1b7837',   # dark green    — original concept bars
+    'match':        '#1b7837',   # dark green    — matched image concepts (same as original)
+    # iso: blue shades
+    'iso_top':      '#2166ac',   # deep blue     — iso top activated
+    'iso_least':    '#9ecae1',   # light blue    — iso least activated
+    'iso_bar':      '#2166ac',   # deep blue     — iso noisy query (SAE retrieval)
+    # mani: purple shades
+    'mani_top':     '#6b3fa0',   # dark purple   — mani top activated
+    'mani_least':   '#c6a8e0',   # light purple  — mani least activated
+    'mani_bar':     '#6b3fa0',   # dark purple   — mani noisy query (SAE retrieval)
+    # activation dist boxplots
+    'dist_top':     '#6b3fa0',   # dark purple   — top concepts
+    'dist_least':   '#c6a8e0',   # light purple  — least concepts
+    'dist_new':     '#2166ac',   # deep blue     — new concepts
 }
 
 from cfm.arg_parser import get_default_parser
@@ -297,7 +312,7 @@ def compute_concept_scores(cv_orig, cv_smoothed_avg, top_k=12):
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Volume computation  (aligned with Jonas's framework)
+# Volume computation  
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def log_volume_isotropic(radius: float, k: int) -> float:
@@ -443,7 +458,7 @@ def cumulative_stretch_energy(eigenvalues_norm: np.ndarray, m: int | None = None
 
 def compute_volumes(r_iso: float, r_mani: float, eigenvalues: np.ndarray, D: int,
                     sigma: float, normalize_mode: str = 'max') -> dict:
-    """Compute certified volume quantities (log-space) per Jonas's framework.
+    """Compute certified volume quantities (log-space) per new framework.
 
     Qty 1: Ambient Iso Ball         = C_D · r_iso^D
     Qty 2: Projected Iso Ball       = C_k · r_iso^k
@@ -596,37 +611,41 @@ classifier_weights = method_obj.get_classifier_weights(
     probe_dataset=PROBE_DATASET, checkpoint_save_path=ckpt_path).to(args.device)
 print(f"Classifier weights: {classifier_weights.shape}")
 
-# SAE autoencoder (for decode sanity check: noisy cv [8192] → CLIP [512])
-autoencoder = None
-try:
-    from dictionary_learning.utils import load_dictionary
-    sae_base = os.path.join(str(args.save_dir_sae_ckpts['img']), args.config_name, 'trainer_0')
-    if os.path.exists(sae_base):
-        autoencoder, _ = load_dictionary(sae_base, args.device)
-        autoencoder.eval()
-        print(f"SAE loaded for decode sanity check from {sae_base}")
-    else:
-        print(f"SAE not found at {sae_base} — decode sanity check will be skipped")
-except Exception as e:
-    print(f"Could not load SAE ({e}) — decode sanity check will be skipped")
+# [OLD — 2 Gallery feedback]
+# SAE autoencoder was loaded here for decode-then-retrieve viz.
+# noisy vectors are OOD for the decoder → decoder output unreliable.
+# We cannot tell if bad retrieval is from noise or decoder failure.
+# New approach: retrieve DIRECTLY in SAE concept space [8192] — no decoder needed.
+#
+# try:
+#     from dictionary_learning.utils import load_dictionary
+#     sae_base = os.path.join(str(args.save_dir_sae_ckpts['img']), args.config_name, 'trainer_0')
+#     if os.path.exists(sae_base):
+#         autoencoder, _ = load_dictionary(sae_base, args.device)
+#         autoencoder.eval()
+#         print(f"SAE loaded for decode sanity check from {sae_base}")
+#     else:
+#         print(f"SAE not found at {sae_base} — decode sanity check will be skipped")
+# except Exception as e:
+#     print(f"Could not load SAE ({e}) — decode sanity check will be skipped")
+#
+# # Feature extractor (for true CLIP gallery — panels 4+5 in decode NN figure)
+# try:
+#     from cfm.utils import get_img_model
+#     feature_extractor, _preprocess_fe = get_img_model(args)
+#     feature_extractor.eval()
+#     print("Feature extractor loaded for true CLIP gallery")
+# except Exception as e:
+#     print(f"Could not load feature extractor ({e}) — true CLIP gallery will be skipped")
+#
+# def decode_cv_to_clip(cv_np, ae, device):
+#     """cv_np [8192] → clip [512] via SAE linear decoder."""
+#     with torch.no_grad():
+#         t = torch.tensor(cv_np, dtype=torch.float32, device=device).unsqueeze(0).unsqueeze(0)
+#         return ae.decode(t).squeeze().cpu().numpy()
 
-
-# Feature extractor (for true CLIP gallery — panels 4+5 in decode NN figure)
-feature_extractor = None
-try:
-    from cfm.utils import get_img_model
-    feature_extractor, _preprocess_fe = get_img_model(args)
-    feature_extractor.eval()
-    print("Feature extractor loaded for true CLIP gallery", flush=True)
-except Exception as e:
-    print(f"Could not load feature extractor ({e}) — true CLIP gallery will be skipped", flush=True)
-
-
-def decode_cv_to_clip(cv_np, ae, device):
-    """cv_np [8192] → clip [512] via SAE linear decoder."""
-    with torch.no_grad():
-        t = torch.tensor(cv_np, dtype=torch.float32, device=device).unsqueeze(0).unsqueeze(0)  # [1,1,8192]
-        return ae.decode(t).squeeze().cpu().numpy()  # [512]
+autoencoder = None        # kept as None so VIZ_ONLY code path doesn't crash
+feature_extractor = None  # same
 
 
 # ===========================================================================
@@ -714,76 +733,140 @@ print(f"Loaded KNN index from {index_path}", flush=True)
 
 
 # ===========================================================================
-# Pre-compute galleries for nearest-neighbour decode viz
+# [OLD] Decode-then-retrieve galleries
+# decoder is in-distribution trained, noisy vectors are OOD →
+#        bad retrieval could be decoder failure, not noise effect.
 # ===========================================================================
+#
+# # Gallery 1: SAE-decoded — val cv [N, 8192] → SAE decode → [N, 512]
+# sae_clip_gallery = None
+# if autoencoder is not None:
+#     with torch.no_grad():
+#         cv_t    = val_concept_vectors.to(args.device)
+#         decoded = autoencoder.decode(cv_t.unsqueeze(1)).squeeze(1)   # [N, 512]
+#         sae_clip_gallery = F.normalize(decoded, dim=-1)
+#
+# # Gallery 2: true CLIP — val images → feature_extractor → avg pool → [N, 512]
+# true_clip_gallery = None
+# TRUE_CLIP_CACHE = os.path.join(DATA_DIR, "true_clip_embeddings_imagenet_val.pt")
+# if feature_extractor is not None and probe_val_dataset is not None:
+#     if os.path.exists(TRUE_CLIP_CACHE):
+#         true_clip_gallery = F.normalize(
+#             torch.load(TRUE_CLIP_CACHE, map_location=args.device), dim=-1)
+#     else:
+#         from torch.utils.data import DataLoader as _DL
+#         _loader = _DL(probe_val_dataset, batch_size=128, shuffle=False,
+#                       num_workers=4, pin_memory=True)
+#         _all = []
+#         with torch.no_grad():
+#             for _imgs, _ in _loader:
+#                 _feats = feature_extractor.get_pooled_feats(_imgs.to(args.device))
+#                 _all.append(_feats.mean(dim=[2, 3]).cpu())
+#         _embs = torch.cat(_all, dim=0)
+#         torch.save(_embs, TRUE_CLIP_CACHE)
+#         true_clip_gallery = F.normalize(_embs.to(args.device), dim=-1)
+#
+# def nn_in_gallery(clip_emb_np, gallery):
+#     """clip_emb_np [512] → (nn_idx, cosine_sim) in gallery [N, 512]."""
+#     with torch.no_grad():
+#         q = torch.tensor(clip_emb_np, dtype=torch.float32, device=args.device)
+#         q = F.normalize(q, dim=-1)
+#         sims = gallery @ q
+#         idx = int(sims.argmax().item())
+#         return idx, float(sims[idx].item())
+#
+# def save_decode_nn_figure(target_idx, cv_orig, cv_noisy, sigma, ...):
+#     """5-panel figure: original | NN(clean) SAE | NN(noisy) SAE |
+#                        NN(clean) TRUE CLIP | NN(noisy) TRUE CLIP"""
+#     clean_clip = decode_cv_to_clip(cv_orig,  autoencoder, args.device)
+#     noisy_clip = decode_cv_to_clip(cv_noisy, autoencoder, args.device)
+#     # ... cosine search in sae_clip_gallery and true_clip_gallery ...
 
-# Gallery 1: SAE-decoded — val cv [N, 8192] → SAE decode → [N, 512]
-sae_clip_gallery = None
-if autoencoder is not None:
-    print("Building SAE-decoded CLIP gallery for val set...", flush=True)
-    with torch.no_grad():
-        cv_t    = val_concept_vectors.to(args.device)
-        decoded = autoencoder.decode(cv_t.unsqueeze(1)).squeeze(1)   # [N, 512]
-        sae_clip_gallery = F.normalize(decoded, dim=-1)
-    print(f"SAE gallery ready: {sae_clip_gallery.shape}", flush=True)
 
-# Gallery 2: true CLIP — val images → feature_extractor → avg pool → [N, 512]
-true_clip_gallery = None
-TRUE_CLIP_CACHE = os.path.join(DATA_DIR, "true_clip_embeddings_imagenet_val.pt")
-if feature_extractor is not None and probe_val_dataset is not None:
-    if os.path.exists(TRUE_CLIP_CACHE):
-        print("Loading cached true CLIP gallery...", flush=True)
-        true_clip_gallery = F.normalize(
-            torch.load(TRUE_CLIP_CACHE, map_location=args.device), dim=-1)
-    else:
-        print("Computing true CLIP gallery (one-time, will be cached)...", flush=True)
-        from torch.utils.data import DataLoader as _DL
-        _loader = _DL(probe_val_dataset, batch_size=128, shuffle=False,
-                      num_workers=4, pin_memory=True)
-        _all = []
-        with torch.no_grad():
-            for _imgs, _ in _loader:
-                _feats = feature_extractor.get_pooled_feats(_imgs.to(args.device))
-                _all.append(_feats.mean(dim=[2, 3]).cpu())
-        _embs = torch.cat(_all, dim=0)
-        torch.save(_embs, TRUE_CLIP_CACHE)
-        true_clip_gallery = F.normalize(_embs.to(args.device), dim=-1)
-        print(f"True CLIP gallery ready: {true_clip_gallery.shape}", flush=True)
+# ===========================================================================
+#  SAE concept-space gallery — no decoder, no 512 projection
+# ===========================================================================
+#
+# HOW val concept vectors were built:
+#   For every val image:
+#     image → CLIP-DINOiser → dense features [196, 512] (14x14 patches)
+#           → SAE encoder → sparse activations [196, 8192]
+#           → max-pool over 196 patches → [8192]   (one vector per image)
+#   Saved to: concept_vectors_imagenet_val.pt  [50000, 8192]
+#
+# These are already in memory as val_concept_vectors.
+#
+# WHY L2-normalise for retrieval:
+#   cosine_similarity(a, b) = dot(a/|a|, b/|b|)
+#   Pre-normalising the gallery means retrieval = one matrix multiply:
+#     sims = gallery_norm @ query_norm   [N]   (efficient, no per-pair division)
+#   Without normalisation, dot product is dominated by magnitude, not direction.
+#   We care about semantic direction (which concepts are active), not raw magnitude.
+#
+# HOW retrieval gives back an image:
+#   argmax(sims) = index i in val set
+#   → probe_val_dataset.samples[i][0] = file path on disk
+#   → load and display that image
+#   The image shown is whatever val image has the closest concept vector to the query.
 
-
-def nn_in_gallery(clip_emb_np, gallery, exclude_idx=None):
-    """clip_emb_np [512] → (nn_idx, cosine_sim) in gallery [N, 512]."""
-    with torch.no_grad():
-        q = torch.tensor(clip_emb_np, dtype=torch.float32, device=args.device)
-        q = F.normalize(q, dim=-1)
-        sims = gallery @ q                      # [N]
-        if exclude_idx is not None:
-            sims[exclude_idx] = -1.0
-        idx = int(sims.argmax().item())
-        return idx, float(sims[idx].item())
+print("Building SAE concept-space gallery (L2-normalised val vectors)...", flush=True)
+sae_concept_gallery = F.normalize(
+    val_concept_vectors.to(args.device), dim=-1   # [50000, 8192]
+)
+# Why normalise: cosine sim = dot product of unit vectors — measures concept direction
+# not activation magnitude. Two images with same active concepts but different scales
+# will still be close after normalisation.
+print(f"SAE concept gallery: {sae_concept_gallery.shape}", flush=True)
 
 
-def save_decode_nn_figure(target_idx, cv_orig, cv_noisy, sigma,
-                           val_labels_t, val_dataset,
-                           sae_gal, true_gal, method_name, save_path):
+def top_n_in_sae(cv_np, n=5):
     """
-    5-panel figure (matches cfm_test.ipynb output):
-      Panel 1: original val image
-      Panel 2: NN(clean) — SAE gallery
-      Panel 3: NN(noisy) — SAE gallery
-      Panel 4: NN(clean) — TRUE CLIP gallery   (skipped if true_gal is None)
-      Panel 5: NN(noisy) — TRUE CLIP gallery   (skipped if true_gal is None)
+    Retrieve top-n nearest neighbours directly in SAE concept space [8192].
+
+    Flow:
+      cv_np [8192]                         ← query: clean or noisy concept vector
+        → L2-normalise → [8192]
+        → dot product with gallery [50000, 8192]
+        → top-n indices                    ← indices into val_concept_vectors
+        → probe_val_dataset.samples[idx]   ← actual image files on disk
+
+    No decoder. No 512. Pure concept-space cosine similarity.
+    """
+    with torch.no_grad():
+        q = torch.tensor(cv_np, dtype=torch.float32, device=args.device)
+        q = F.normalize(q, dim=-1)
+        sims = sae_concept_gallery @ q     # [50000] cosine sims
+        top = sims.topk(n)
+    return top.indices.cpu().tolist(), top.values.cpu().tolist()
+
+
+def save_sae_retrieval_figure(target_idx, cv_orig, cv_iso, cv_mani,
+                               sigma, val_labels_t, val_dataset,
+                               method_name, save_path, top_n=5, top_k_bars=10):
+    """
+    retrieve directly in SAE concept space [8192].
+    No decoder. No 512 projection.
+
+    How it works:
+      1. val_concept_vectors [50000, 8192]
+             each row = one val image's sparse concept vector
+             built by: image → CLIP-DINOiser → SAE encode → max-pool over 196 patches
+      2. L2-normalise both query and gallery → cosine similarity = dot product
+             Why L2-norm: we care about which concepts are active (direction),
+             not how strongly (magnitude). Normalising makes sims comparable.
+      3. argmax over [50000] sims → index i → probe_val_dataset.samples[i][0]
+             The image file at index i is the one whose concept vector is most
+             similar to the query. That is the "retrieved image".
+
+    Figure layout — 4 separate files (iso_top, iso_least, mani_top, mani_least):
+      Row 0:   original image | original cv bars  | noisy cv bars  ← fixed reference
+      Row 1-5: matched img    | matched TRUE bars  | noisy cv bars  ← top-n SAE matches
+
+      cv_orig is NOT queried — it is in the gallery so top-1 = itself (sim=1.0, trivial).
+      cv_iso and cv_mani are queried separately → different matched images → separate figures.
     """
     from PIL import Image as _PILImage
-
-    clean_clip = decode_cv_to_clip(cv_orig,  autoencoder, args.device)
-    noisy_clip = decode_cv_to_clip(cv_noisy, autoencoder, args.device)
-
-    sim_cn = float(F.cosine_similarity(
-        F.normalize(torch.tensor(clean_clip), dim=0).unsqueeze(0),
-        F.normalize(torch.tensor(noisy_clip), dim=0).unsqueeze(0)).item())
-
-    label_id = int(val_labels_t[target_idx].item())
+    import matplotlib.gridspec as gridspec
 
     def _load(idx):
         try:
@@ -793,52 +876,88 @@ def save_decode_nn_figure(target_idx, cv_orig, cv_noisy, sigma,
             pass
         return None
 
-    panels = [(_load(target_idx),
-               f"ORIGINAL\n{get_class_name(PROBE_DATASET, label_id)}")]
-
-    # SAE gallery — clean and noisy
-    if sae_gal is not None:
-        nn_cs, sim_cs = nn_in_gallery(clean_clip, sae_gal)
-        nn_ns, sim_ns = nn_in_gallery(noisy_clip, sae_gal)
-        lbl_cs = int(val_labels_t[nn_cs].item())
-        lbl_ns = int(val_labels_t[nn_ns].item())
-        panels += [
-            (_load(nn_cs),
-             f"NN(clean) SAE gallery\n{get_class_name(PROBE_DATASET, lbl_cs)}\nsim={sim_cs:.3f}"),
-            (_load(nn_ns),
-             f"NN(noisy) SAE gallery\n{get_class_name(PROBE_DATASET, lbl_ns)}\nsim={sim_ns:.3f}"),
-        ]
-
-    # TRUE CLIP gallery — clean and noisy
-    if true_gal is not None:
-        nn_ct, sim_ct = nn_in_gallery(clean_clip, true_gal)
-        nn_nt, sim_nt = nn_in_gallery(noisy_clip, true_gal)
-        lbl_ct = int(val_labels_t[nn_ct].item())
-        lbl_nt = int(val_labels_t[nn_nt].item())
-        panels += [
-            (_load(nn_ct),
-             f"NN(clean) TRUE CLIP gallery\n{get_class_name(PROBE_DATASET, lbl_ct)}\nsim={sim_ct:.3f}"),
-            (_load(nn_nt),
-             f"NN(noisy) TRUE CLIP gallery\n{get_class_name(PROBE_DATASET, lbl_nt)}\nsim={sim_nt:.3f}"),
-        ]
-
-    n_panels = len(panels)
-    fig, axes = plt.subplots(1, n_panels, figsize=(4.5 * n_panels, 4.5))
-    for ax, (img, title) in zip(axes, panels):
-        if img is not None:
-            ax.imshow(img)
+    def _concept_bars(ax, cv_np, title, color, mode='top'):
+        cv = np.array(cv_np)
+        if mode == 'top':
+            idxs = np.argsort(-cv)[:top_k_bars]
         else:
-            ax.text(0.5, 0.5, "not found", ha='center', va='center', transform=ax.transAxes)
-        ax.set_title(title, fontsize=8.5)
-        ax.axis("off")
+            active = np.where(cv > 1e-6)[0]
+            if len(active) == 0:
+                ax.set_visible(False)
+                return
+            idxs = active[np.argsort(cv[active])[:top_k_bars]]
+        vals  = cv[idxs]
+        names = [(concept_names[i] if concept_names else f"c{i}")[:22] for i in idxs]
+        order = np.argsort(vals)[::-1]   # descending
+        y     = np.arange(len(idxs))
+        bars  = ax.barh(y, vals[order], color=color, alpha=0.85)
+        ax.set_yticks(y)
+        ax.set_yticklabels([names[i] for i in order], fontsize=6)
+        ax.invert_yaxis()
+        # activation number at bar end
+        for bar, val in zip(bars, vals[order]):
+            ax.text(bar.get_width() + 0.02 * (vals.max() or 1),
+                    bar.get_y() + bar.get_height() / 2,
+                    f"{val:.2f}", va='center', ha='left', fontsize=6, color='#333')
+        ax.set_xlim(0, (vals.max() or 1) * 1.25)
+        ax.set_xlabel('Activation', fontsize=6)
+        ax.set_title(title, fontsize=7, fontweight='bold')
+        ax.spines['top'].set_visible(False)
+        ax.spines['right'].set_visible(False)
+        ax.grid(axis='x', alpha=0.2, linestyle='--')
 
-    fig.suptitle(
-        f"idx={target_idx}  σ={sigma}  |  cosine(clean_clip, noisy_clip) = {sim_cn:.3f}",
-        fontsize=9, fontweight='bold'
-    )
-    plt.tight_layout()
-    plt.savefig(save_path, dpi=150, bbox_inches='tight')
-    plt.close(fig)
+    # retrieve top-n only for noisy queries — cv_orig NOT queried (trivial self-match)
+    iso_idxs,  iso_sims  = top_n_in_sae(cv_iso,  n=top_n)
+    mani_idxs, mani_sims = top_n_in_sae(cv_mani, n=top_n)
+    label_id   = int(val_labels_t[target_idx].item())
+    true_class = get_class_name(PROBE_DATASET, label_id)
+
+    for mode in ['top', 'least']:
+        for noisy_cv, noisy_idxs, noisy_sims, noisy_label, c_noisy in [
+            (cv_iso,  iso_idxs,  iso_sims,  'Iso',      C['iso_bar']),
+            (cv_mani, mani_idxs, mani_sims, 'Manifold', C['mani_bar']),
+        ]:
+            n_rows = top_n + 1   # +1 for original reference row
+            fig = plt.figure(figsize=(15, 3.0 * n_rows))
+            gs  = gridspec.GridSpec(n_rows, 3, figure=fig,
+                                    width_ratios=[1, 2.5, 2.5],
+                                    hspace=0.65, wspace=0.45)
+
+            # Row 0: original image + original concept bars (fixed reference)
+            ax0 = fig.add_subplot(gs[0, 0])
+            img0 = _load(target_idx)
+            if img0: ax0.imshow(img0)
+            ax0.axis('off')
+            ax0.set_title(f"ORIGINAL\n{true_class[:22]}", fontsize=7, fontweight='bold')
+            _concept_bars(fig.add_subplot(gs[0, 1]),
+                          cv_orig,   "Original concept activations", C['overall'],  mode=mode)
+            _concept_bars(fig.add_subplot(gs[0, 2]),
+                          noisy_cv,  f"{noisy_label} query activations", c_noisy,   mode=mode)
+
+            # Rows 1-top_n: top-n SAE matches of the noisy query
+            for row, (ni, sim_val) in enumerate(zip(noisy_idxs, noisy_sims), start=1):
+                ax_img = fig.add_subplot(gs[row, 0])
+                img = _load(ni)
+                if img: ax_img.imshow(img)
+                ax_img.axis('off')
+                lbl = get_class_name(PROBE_DATASET, int(val_labels_t[ni].item()))
+                ax_img.set_title(f"Match #{row}  sim={sim_val:.3f}\n{lbl[:22]}", fontsize=6.5)
+
+                cv_ni = val_concept_vectors[ni].numpy()
+                _concept_bars(fig.add_subplot(gs[row, 1]),
+                              cv_ni,    "Matched image concepts (true)", C['match'],  mode=mode)
+                _concept_bars(fig.add_subplot(gs[row, 2]),
+                              noisy_cv, f"{noisy_label} query activations", c_noisy,  mode=mode)
+
+            mode_lbl = 'Top' if mode == 'top' else 'Least'
+            fig.suptitle(
+                f"{noisy_label} smoothing — SAE retrieval  ({mode_lbl} {top_k_bars} concepts)\n"
+                f"idx={target_idx}  true: {true_class}  σ={sigma}",
+                fontsize=10, fontweight='bold', y=1.01
+            )
+            out = save_path.replace('.png', f'_{noisy_label.lower()}_{mode}.png')
+            plt.savefig(out, dpi=150, bbox_inches='tight')
+            plt.close(fig)
 
 
 # ===========================================================================
@@ -1192,8 +1311,8 @@ if VIZ_ONLY:
         y = np.arange(n_show)
 
         ax = axes_bm[0]
-        ax.barh(y - 0.2, top_orig_vals[::-1],   height=0.35, color=C['overall'],  label='Original',     alpha=0.8)
-        ax.barh(y + 0.2, top_smooth_vals[::-1],  height=0.35, color=C['manifold'], label='Manifold avg', alpha=0.8)
+        ax.barh(y - 0.2, top_orig_vals[::-1],   height=0.35, color=C['overall'],   label='Original',     alpha=0.8)
+        ax.barh(y + 0.2, top_smooth_vals[::-1],  height=0.35, color=C['mani_top'],  label='Manifold avg', alpha=0.8)
         ax.set_yticks(y); ax.set_yticklabels([n[:25] for n in top_names_vo[::-1]], fontsize=8)
         ax.set_xlim(0, shared_xlim_m); ax.set_xlabel('Activation')
         ax.set_title(f'Top Activated  [{get_class_name(PROBE_DATASET, pred_orig)} → '
@@ -1203,8 +1322,8 @@ if VIZ_ONLY:
         ax.legend(fontsize=8); ax.grid(True, axis='x', alpha=0.3)
 
         ax = axes_bm[1]
-        ax.barh(y - 0.2, least_orig_m[::-1],   height=0.35, color=C['overall'],  label='Original',     alpha=0.8)
-        ax.barh(y + 0.2, least_smooth_m[::-1],  height=0.35, color=C['manifold'], label='Manifold avg', alpha=0.8)
+        ax.barh(y - 0.2, least_orig_m[::-1],   height=0.35, color=C['overall'],    label='Original',     alpha=0.8)
+        ax.barh(y + 0.2, least_smooth_m[::-1],  height=0.35, color=C['mani_least'], label='Manifold avg', alpha=0.8)
         ax.set_yticks(y); ax.set_yticklabels([n[:25] for n in least_names_m[::-1]], fontsize=8)
         ax.set_xlim(0, shared_xlim_m); ax.set_xlabel('Activation')
         ax.set_title('Least Activated (originally active, sorted by smoothed score)',
@@ -1239,8 +1358,8 @@ if VIZ_ONLY:
         y = np.arange(n_show)
 
         ax = axes_bg[0]
-        ax.barh(y - 0.2, g_top_orig_vals[::-1],   height=0.35, color=C['overall'],   label='Original',      alpha=0.8)
-        ax.barh(y + 0.2, g_top_smooth_vals[::-1],  height=0.35, color=C['isotropic'], label='Isotropic avg', alpha=0.8)
+        ax.barh(y - 0.2, g_top_orig_vals[::-1],   height=0.35, color=C['overall'],  label='Original',      alpha=0.8)
+        ax.barh(y + 0.2, g_top_smooth_vals[::-1],  height=0.35, color=C['iso_top'],  label='Isotropic avg', alpha=0.8)
         ax.set_yticks(y); ax.set_yticklabels([n[:25] for n in g_top_names_vo[::-1]], fontsize=8)
         ax.set_xlim(0, shared_xlim_g); ax.set_xlabel('Activation')
         ax.set_title(f'Top Activated  [{get_class_name(PROBE_DATASET, pred_orig)} → '
@@ -1251,7 +1370,7 @@ if VIZ_ONLY:
 
         ax = axes_bg[1]
         ax.barh(y - 0.2, least_orig_g[::-1],   height=0.35, color=C['overall'],   label='Original',      alpha=0.8)
-        ax.barh(y + 0.2, least_smooth_g[::-1],  height=0.35, color=C['isotropic'], label='Isotropic avg', alpha=0.8)
+        ax.barh(y + 0.2, least_smooth_g[::-1],  height=0.35, color=C['iso_least'], label='Isotropic avg', alpha=0.8)
         ax.set_yticks(y); ax.set_yticklabels([n[:25] for n in least_names_g[::-1]], fontsize=8)
         ax.set_xlim(0, shared_xlim_g); ax.set_xlabel('Activation')
         ax.set_title('Least Activated (originally active, sorted by smoothed score)',
@@ -1268,20 +1387,14 @@ if VIZ_ONLY:
                     dpi=150, bbox_inches='tight')
         plt.close(fig_bg)
 
-        # ── decode NN figures ─────────────────────────────────────────────
-        if sae_clip_gallery is not None or true_clip_gallery is not None:
-            cv_noisy_m = (cv_whitened + np.random.normal(0, alpha, size=len(ev))) @ (np.sqrt(ev)[:, None] * Vt) + mean_nn
-            save_decode_nn_figure(
-                target_idx, cv_orig, cv_noisy_m, round(SCALE_WEIGHT, 3),
-                val_labels, probe_val_dataset,
-                sae_clip_gallery, true_clip_gallery, 'Manifold Smoothing',
-                os.path.join(manifold_dir, f"idx{target_idx}_decode_nn.png"))
-            cv_noisy_g = cv_orig + np.random.normal(0, gauss_sigma, size=cv_orig.shape)
-            save_decode_nn_figure(
-                target_idx, cv_orig, cv_noisy_g, round(float(gauss_sigma), 3),
-                val_labels, probe_val_dataset,
-                sae_clip_gallery, true_clip_gallery, 'Isotropic Smoothing',
-                os.path.join(isotropic_dir, f"idx{target_idx}_decode_nn.png"))
+        # ── SAE-space retrieval figure ────────
+        cv_noisy_m = (cv_whitened + np.random.normal(0, alpha, size=len(ev))) @ (np.sqrt(ev)[:, None] * Vt) + mean_nn
+        cv_noisy_g = cv_orig + np.random.normal(0, gauss_sigma, size=cv_orig.shape)
+        save_sae_retrieval_figure(
+            target_idx, cv_orig, cv_noisy_g, cv_noisy_m,
+            round(SCALE_WEIGHT, 3), val_labels, probe_val_dataset,
+            'Manifold vs Isotropic',
+            os.path.join(manifold_dir, f"idx{target_idx}_sae_retrieval.png"))
 
         print(f"  Saved viz for idx {target_idx} (VIZ_ONLY)", flush=True)
         viz_count += 1
@@ -1842,7 +1955,7 @@ for loop_i, target_idx in enumerate(TARGET_IDCS if not VIZ_ONLY else []):
 
         ax = axes_m[0]
         ax.barh(y - 0.2, top_orig_vals[::-1],   height=0.35, color=C['overall'],  label='Original',     alpha=0.8)
-        ax.barh(y + 0.2, top_smooth_vals[::-1],  height=0.35, color=C['manifold'], label='Manifold avg', alpha=0.8)
+        ax.barh(y + 0.2, top_smooth_vals[::-1],  height=0.35, color=C['mani_top'], label='Manifold avg', alpha=0.8)
         ax.set_yticks(y); ax.set_yticklabels([n[:25] for n in top_names[::-1]], fontsize=8)
         ax.set_xlim(0, shared_xlim_m); ax.set_xlabel('Activation')
         ax.set_title(f'Top Activated  [{get_class_name(PROBE_DATASET, pred_orig)} → '
@@ -1852,8 +1965,8 @@ for loop_i, target_idx in enumerate(TARGET_IDCS if not VIZ_ONLY else []):
         ax.legend(fontsize=8); ax.grid(True, axis='x', alpha=0.3)
 
         ax = axes_m[1]
-        ax.barh(y - 0.2, least_orig_m[::-1],   height=0.35, color=C['overall'],  label='Original',     alpha=0.8)
-        ax.barh(y + 0.2, least_smooth_m[::-1],  height=0.35, color=C['manifold'], label='Manifold avg', alpha=0.8)
+        ax.barh(y - 0.2, least_orig_m[::-1],   height=0.35, color=C['overall'],    label='Original',     alpha=0.8)
+        ax.barh(y + 0.2, least_smooth_m[::-1],  height=0.35, color=C['mani_least'], label='Manifold avg', alpha=0.8)
         ax.set_yticks(y); ax.set_yticklabels([n[:25] for n in least_names_m[::-1]], fontsize=8)
         ax.set_xlim(0, shared_xlim_m); ax.set_xlabel('Activation')
         ax.set_title('Least Activated (originally active, sorted by smoothed score)',
@@ -1871,16 +1984,16 @@ for loop_i, target_idx in enumerate(TARGET_IDCS if not VIZ_ONLY else []):
                     dpi=150, bbox_inches='tight')
         plt.close(fig_m)
 
-        # Decode NN figure — manifold
-        if sae_clip_gallery is not None or true_clip_gallery is not None:
-            cv_noisy_example = cv_whitened + np.random.normal(0, alpha, size=len(ev))
-            cv_noisy_example = cv_noisy_example @ (np.sqrt(ev)[:, None] * Vt) + mean_nn
-            save_decode_nn_figure(
-                target_idx, cv_orig, cv_noisy_example, round(SCALE_WEIGHT, 3),
-                val_labels, probe_val_dataset,
-                sae_clip_gallery, true_clip_gallery, 'Manifold Smoothing',
-                os.path.join(manifold_dir, f"idx{target_idx}_decode_nn.png")
-            )
+        # SAE-space retrieval figure (no decoder, direct [8192] cosine search)
+        cv_noisy_m_ex = cv_whitened + np.random.normal(0, alpha, size=len(ev))
+        cv_noisy_m_ex = cv_noisy_m_ex @ (np.sqrt(ev)[:, None] * Vt) + mean_nn
+        cv_noisy_g_ex = cv_orig + np.random.normal(0, gauss_sigma, size=cv_orig.shape)
+        save_sae_retrieval_figure(
+            target_idx, cv_orig, cv_noisy_g_ex, cv_noisy_m_ex,
+            round(SCALE_WEIGHT, 3), val_labels, probe_val_dataset,
+            'Manifold vs Isotropic',
+            os.path.join(manifold_dir, f"idx{target_idx}_sae_retrieval.png")
+        )
 
         # Manifold JSON
         manifold_result = {
@@ -1961,8 +2074,8 @@ for loop_i, target_idx in enumerate(TARGET_IDCS if not VIZ_ONLY else []):
         y = np.arange(n_show)
 
         ax = axes_g[0]
-        ax.barh(y - 0.2, g_top_orig_vals[::-1],   height=0.35, color=C['overall'],   label='Original',      alpha=0.8)
-        ax.barh(y + 0.2, g_top_smooth_vals[::-1],  height=0.35, color=C['isotropic'], label='Isotropic avg', alpha=0.8)
+        ax.barh(y - 0.2, g_top_orig_vals[::-1],   height=0.35, color=C['overall'],  label='Original',      alpha=0.8)
+        ax.barh(y + 0.2, g_top_smooth_vals[::-1],  height=0.35, color=C['iso_top'],  label='Isotropic avg', alpha=0.8)
         ax.set_yticks(y); ax.set_yticklabels([n[:25] for n in g_top_names[::-1]], fontsize=8)
         ax.set_xlim(0, shared_xlim_g); ax.set_xlabel('Activation')
         ax.set_title(f'Top Activated  [{get_class_name(PROBE_DATASET, pred_orig)} → '
@@ -1973,7 +2086,7 @@ for loop_i, target_idx in enumerate(TARGET_IDCS if not VIZ_ONLY else []):
 
         ax = axes_g[1]
         ax.barh(y - 0.2, least_orig_g[::-1],   height=0.35, color=C['overall'],   label='Original',      alpha=0.8)
-        ax.barh(y + 0.2, least_smooth_g[::-1],  height=0.35, color=C['isotropic'], label='Isotropic avg', alpha=0.8)
+        ax.barh(y + 0.2, least_smooth_g[::-1],  height=0.35, color=C['iso_least'], label='Isotropic avg', alpha=0.8)
         ax.set_yticks(y); ax.set_yticklabels([n[:25] for n in least_names_g[::-1]], fontsize=8)
         ax.set_xlim(0, shared_xlim_g); ax.set_xlabel('Activation')
         ax.set_title('Least Activated (originally active, sorted by smoothed score)',
@@ -1991,15 +2104,7 @@ for loop_i, target_idx in enumerate(TARGET_IDCS if not VIZ_ONLY else []):
                     dpi=150, bbox_inches='tight')
         plt.close(fig_g)
 
-        # Decode NN figure — isotropic
-        if sae_clip_gallery is not None or true_clip_gallery is not None:
-            cv_noisy_example = cv_orig + np.random.normal(0, gauss_sigma, size=cv_orig.shape)
-            save_decode_nn_figure(
-                target_idx, cv_orig, cv_noisy_example, round(float(gauss_sigma), 3),
-                val_labels, probe_val_dataset,
-                sae_clip_gallery, true_clip_gallery, 'Isotropic Smoothing',
-                os.path.join(isotropic_dir, f"idx{target_idx}_decode_nn.png")
-            )
+        # SAE-space retrieval already saved above (shared manifold+iso figure)
 
         # Isotropic JSON
         isotropic_result = {
@@ -2124,7 +2229,7 @@ for loop_i, target_idx in enumerate(TARGET_IDCS if not VIZ_ONLY else []):
 
             fig, ax = plt.subplots(figsize=(12, max(6, len(c_labels) * 0.4)))
             y_pos = np.arange(len(c_labels))
-            ax.barh(y_pos - 0.2, orig_vals, height=0.35, color='steelblue',
+            ax.barh(y_pos - 0.2, orig_vals, height=0.35, color=C['overall'],
                     label='Original', alpha=0.8)
             ax.barh(y_pos + 0.2, smooth_vals, height=0.35, color=color_smooth,
                     label=f'{method_name} avg', alpha=0.8)
@@ -2161,77 +2266,73 @@ for loop_i, target_idx in enumerate(TARGET_IDCS if not VIZ_ONLY else []):
         # ---------------------------------------------------------------
         def _plot_activation_distribution(all_smooth_vecs, orig_top_idxs_arr, cv_orig,
                                           concept_votes, concept_names_list, orig_top_set,
-                                          method_name, color_top, color_least, color_new,
-                                          save_path, target_idx, n_samples, n_new=10):
-            """3-row box plot: top-20 (original), least-activated (original near-zero), new concepts.
-            
-            Row 1: Original top-K concepts sorted by original activation
-            Row 2: Least activated — originally active concepts with lowest activation values
-            Row 3: New concepts — NOT in original top-K but appeared frequently after smoothing
-            """
-            smooth_mat = np.stack(all_smooth_vecs)  # (N, 8192)
+                                          method_name, save_path, target_idx, n_samples,
+                                          n_show=10):
+            """3-row boxplot: top-10 concepts, least-10, new-10. Purple theme."""
+            smooth_mat = np.stack(all_smooth_vecs)   # [N, 8192]
 
-            # --- Row 1: Original top-K sorted by original activation ---
-            sorted_top = sorted(orig_top_idxs_arr, key=lambda i: cv_orig[i], reverse=True)
+            # Row 1: top-10 by original activation
+            sorted_top = sorted(orig_top_idxs_arr, key=lambda i: cv_orig[i], reverse=True)[:n_show]
 
-            # --- Row 2: Least activated (originally had low but non-zero activation) ---
-            # Find originally-active concepts (activation > 1e-6) NOT in top-K, sorted by
-            # original activation ascending. These are on the boundary.
+            # Row 2: least active — originally active but lowest activation
             all_active = np.where(cv_orig > 1e-6)[0]
-            least_candidates = [i for i in all_active if i not in orig_top_set]
-            least_candidates = sorted(least_candidates, key=lambda i: cv_orig[i])[:n_new]
-            # If not enough non-top-K active concepts, include the weakest from top-K
-            if len(least_candidates) < n_new:
-                weak_top = sorted(orig_top_idxs_arr, key=lambda i: cv_orig[i])[:n_new - len(least_candidates)]
-                least_candidates = least_candidates + [i for i in weak_top if i not in least_candidates]
+            least_candidates = sorted([i for i in all_active if i not in orig_top_set],
+                                      key=lambda i: cv_orig[i])[:n_show]
+            if len(least_candidates) < n_show:
+                weak = sorted(orig_top_idxs_arr, key=lambda i: cv_orig[i])
+                for i in weak:
+                    if i not in least_candidates:
+                        least_candidates.append(i)
+                    if len(least_candidates) >= n_show:
+                        break
 
-            # --- Row 3: New concepts (NOT in original top-K, appeared in smooth samples) ---
-            new_concepts = [(cidx, cnt) for cidx, cnt in concept_votes.most_common()
-                          if cidx not in orig_top_set]
-            new_concept_idxs = [c[0] for c in new_concepts[:n_new]]
+            # Row 3: new concepts — appeared after smoothing, not in original top
+            new_concept_idxs = [c[0] for c in concept_votes.most_common()
+                                 if c[0] not in orig_top_set][:n_show]
 
-            # Helper to make one row of box plots
             def _draw_row(ax, concept_idxs, row_color, row_label):
                 if not concept_idxs:
-                    ax.text(0.5, 0.5, 'None', ha='center', va='center', transform=ax.transAxes)
-                    ax.set_title(row_label, fontsize=11, fontweight='bold')
+                    ax.text(0.5, 0.5, 'None', ha='center', va='center',
+                            transform=ax.transAxes, fontsize=9)
+                    ax.set_title(row_label, fontsize=10, fontweight='bold')
                     return
-                c_names = [(concept_names_list[i] if concept_names_list else f"c_{i}")[:25]
+                c_names = [(concept_names_list[i] if concept_names_list else f"c{i}")[:25]
                            for i in concept_idxs]
-                data = [smooth_mat[:, i].tolist() for i in concept_idxs]
+                data      = [smooth_mat[:, i].tolist() for i in concept_idxs]
                 orig_vals = [float(cv_orig[i]) for i in concept_idxs]
 
-                bp = ax.boxplot(data, positions=range(len(c_names)), widths=0.6,
-                               patch_artist=True, showfliers=False,
-                               medianprops=dict(color='black', linewidth=1.5))
+                bp = ax.boxplot(data, positions=range(len(c_names)), widths=0.55,
+                                patch_artist=True, showfliers=False,
+                                medianprops=dict(color='white', linewidth=1.5))
                 for patch in bp['boxes']:
                     patch.set_facecolor(row_color)
-                    patch.set_alpha(0.6)
-                ax.scatter(range(len(c_names)), orig_vals, c='red', s=80, marker='D',
-                          zorder=5, edgecolors='darkred', linewidths=1, label='Original')
+                    patch.set_alpha(0.7)
+                ax.scatter(range(len(c_names)), orig_vals, c='#e41a1c', s=60,
+                           marker='D', zorder=5, label='Original', edgecolors='darkred',
+                           linewidths=0.8)
                 for j, d in enumerate(data):
-                    jitter = np.random.normal(0, 0.08, size=len(d))
-                    ax.scatter(np.full(len(d), j) + jitter, d, c=row_color, s=3, alpha=0.15, zorder=2)
+                    jitter = np.random.normal(0, 0.07, size=len(d))
+                    ax.scatter(np.full(len(d), j) + jitter, d,
+                               c=row_color, s=3, alpha=0.12, zorder=2)
                 ax.set_xticks(range(len(c_names)))
-                ax.set_xticklabels(c_names, rotation=45, ha='right', fontsize=8)
-                ax.set_ylabel('Activation')
-                ax.set_title(row_label, fontsize=11, fontweight='bold')
+                ax.set_xticklabels(c_names, rotation=40, ha='right', fontsize=8)
+                ax.set_ylabel('Activation', fontsize=8)
+                ax.set_title(row_label, fontsize=10, fontweight='bold')
                 ax.legend(fontsize=8, loc='upper right')
-                ax.grid(True, axis='y', alpha=0.3)
-                ax.axhline(y=0, color='gray', ls='-', alpha=0.3)
+                ax.grid(True, axis='y', alpha=0.2, linestyle='--')
+                ax.axhline(y=0, color='gray', ls='-', alpha=0.2)
+                ax.spines['top'].set_visible(False)
+                ax.spines['right'].set_visible(False)
 
-            fig, axes = plt.subplots(3, 1, figsize=(max(14, max(len(sorted_top), n_new) * 0.6), 18))
+            fig, axes = plt.subplots(3, 1, figsize=(max(12, n_show * 0.9), 15))
+            _draw_row(axes[0], sorted_top,       C['dist_top'],   f'Top {n_show} concepts')
+            _draw_row(axes[1], least_candidates, C['dist_least'], f'Least {n_show} concepts')
+            _draw_row(axes[2], new_concept_idxs, C['dist_new'],   f'New {n_show} concepts (emerged after smoothing)')
 
-            _draw_row(axes[0], sorted_top, color_top,
-                      f'Top-{orig_top_k} Original Concepts (sorted by activation)')
-            _draw_row(axes[1], least_candidates, color_least,
-                      f'Least Activated (weak/boundary concepts)')
-            _draw_row(axes[2], new_concept_idxs, color_new,
-                      f'Top-{n_new} NEW Concepts (not in original top-{orig_top_k}, emerged after smoothing)')
-
-            fig.suptitle(f'{method_name} — Activation Distributions (N={n_samples})\n'
-                         f'idx={target_idx}, true={get_class_name(PROBE_DATASET, label_true)}',
-                         fontsize=13, fontweight='bold', y=1.01)
+            fig.suptitle(
+                f'{method_name}   idx={target_idx}   '
+                f'true={get_class_name(PROBE_DATASET, label_true)}',
+                fontsize=11, fontweight='bold', y=1.01)
             plt.tight_layout()
             plt.savefig(save_path, dpi=150, bbox_inches='tight')
             plt.close(fig)
@@ -2239,14 +2340,14 @@ for loop_i, target_idx in enumerate(TARGET_IDCS if not VIZ_ONLY else []):
         _plot_activation_distribution(
             all_manifold_smooth_vecs, orig_top_idxs, cv_orig,
             all_concept_votes_manifold, concept_names, orig_top,
-            'Manifold Smoothing', '#2196F3', '#757575', '#FF9800',
+            'Manifold Smoothing',
             os.path.join(manifold_dir, f"idx{target_idx}_activation_dist.png"),
             target_idx, N_SMOOTH_SAMPLES)
 
         _plot_activation_distribution(
             all_gauss_smooth_vecs, orig_top_idxs, cv_orig,
             all_concept_votes_gaussian, concept_names, orig_top,
-            'Isotropic Gaussian', '#2196F3', '#757575', '#FF9800',
+            'Isotropic Smoothing',
             os.path.join(isotropic_dir, f"idx{target_idx}_activation_dist.png"),
             target_idx, N_SMOOTH_SAMPLES)
 
