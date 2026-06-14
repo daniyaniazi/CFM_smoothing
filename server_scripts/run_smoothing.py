@@ -922,37 +922,57 @@ def save_sae_retrieval_figure(target_idx, cv_orig, cv_iso, cv_mani,
     true_class = get_class_name(PROBE_DATASET, label_id)
 
     def _comparison_bars(ax, cv_a, cv_b, color_a, color_b,
-                         label_a, label_b, order_by='a', mode='top'):
-        """Double bar: cv_a and cv_b on same concepts, sorted by order_by."""
+                         label_a, label_b, order_by='a', mode='top', xlim=None):
+        """
+        Paper-style horizontal bar chart.
+        - Concept name + activation value shown as text inside/beside each bar
+        - Both vectors shown side by side for each concept
+        - Zero activations kept (shown as tiny bar) — matches reference paper style
+        """
         cv_a, cv_b = np.array(cv_a), np.array(cv_b)
         ref = cv_a if order_by == 'a' else cv_b
         if mode == 'top':
             idxs = np.argsort(-ref)[:top_k_bars]
         else:
-            active = np.where(ref > 1e-6)[0]
-            if len(active) == 0:
-                ax.set_visible(False)
+            # least: pick lowest activations among those with any activation in EITHER vector
+            both_active = np.where((cv_a > 1e-6) | (cv_b > 1e-6))[0]
+            if len(both_active) == 0:
+                ax.text(0.5, 0.5, 'no active concepts', ha='center', va='center',
+                        transform=ax.transAxes, fontsize=8)
+                ax.axis('off')
                 return
-            idxs = active[np.argsort(ref[active])[:top_k_bars]]
+            idxs = both_active[np.argsort(ref[both_active])[:top_k_bars]]
+
         vals_a = cv_a[idxs]
         vals_b = cv_b[idxs]
-        names  = [(concept_names[i] if concept_names else f"c{i}")[:22] for i in idxs]
-        order  = np.argsort(ref[idxs])[::-1]
+        names  = [(concept_names[i] if concept_names else f"c{i}")[:20] for i in idxs]
+        order  = np.argsort(ref[idxs])[::-1]   # descending
         y, h   = np.arange(len(idxs)), 0.35
-        ax.barh(y - h/2, vals_a[order], height=h, color=color_a, alpha=0.85, label=label_a)
-        ax.barh(y + h/2, vals_b[order], height=h, color=color_b, alpha=0.85, label=label_b)
+
+        ax.barh(y - h/2, vals_a[order], height=h, color=color_a, alpha=0.88, label=label_a)
+        ax.barh(y + h/2, vals_b[order], height=h, color=color_b, alpha=0.88, label=label_b)
         ax.set_yticks(y)
-        ax.set_yticklabels([names[i] for i in order], fontsize=6)
+        ax.set_yticklabels([names[i] for i in order], fontsize=7)
         ax.invert_yaxis()
-        xmax = max(vals_a.max(), vals_b.max(), 0.01) * 1.3
+
+        vmax = max(float(vals_a.max()), float(vals_b.max()), 0.001)
+        xmax = xlim if xlim else vmax * 1.35
+
+        # activation value at end of each bar — always shown, format adapts
         for yi, (va, vb) in enumerate(zip(vals_a[order], vals_b[order])):
-            ax.text(va + xmax*0.01, yi - h/2, f"{va:.2f}", va='center', fontsize=5.5, color='#333')
-            ax.text(vb + xmax*0.01, yi + h/2, f"{vb:.2f}", va='center', fontsize=5.5, color='#333')
+            for val, yoff in [(va, -h/2), (vb, h/2)]:
+                txt = f"{val:.2f}" if val >= 0.01 else f"{val:.4f}"
+                # place just after bar end, clipped to axes
+                ax.text(min(val + vmax * 0.015, xmax * 0.98), yi + yoff,
+                        txt, va='center', ha='left',
+                        fontsize=6, color='#222', clip_on=True)
+
         ax.set_xlim(0, xmax)
-        ax.set_xlabel('Activation', fontsize=6)
+        ax.set_xlabel('Activation', fontsize=7)
+        ax.tick_params(labelsize=7)
         ax.spines['top'].set_visible(False)
         ax.spines['right'].set_visible(False)
-        ax.grid(axis='x', alpha=0.2, linestyle='--')
+        ax.grid(axis='x', alpha=0.15, linestyle='--')
 
     # Euclidean distances — how far each noisy vector moved from original
     dist_iso  = float(np.linalg.norm(cv_iso  - cv_orig))
@@ -999,38 +1019,33 @@ def save_sae_retrieval_figure(target_idx, cv_orig, cv_iso, cv_mani,
 
             shared_xlim0 = _get_vals_for_xlim(cv_orig, noisy_cv, mode)
 
-            fig0 = plt.figure(figsize=(12, 10))
-            gs0  = plt.GridSpec(3, 2, figure=fig0,
-                                height_ratios=[1, 2, 2],
-                                hspace=0.5, wspace=0.4)
+            fig0, axes0 = plt.subplots(3, 1, figsize=(7, 8),
+                                        gridspec_kw={'height_ratios': [0.8, 2, 2],
+                                                     'hspace': 0.6})
 
-            # image spanning both columns
-            ax_img0 = fig0.add_subplot(gs0[0, :])
+            # row 0: original image — natural aspect ratio, centred
+            ax_img0 = axes0[0]
             img0 = _load(target_idx)
             if img0:
-                ax_img0.imshow(img0, aspect='auto')
+                ax_img0.imshow(img0)          # no aspect='auto' → natural ratio
             ax_img0.axis('off')
-            ax_img0.set_title(f"ORIGINAL  {true_class[:30]}", fontsize=9, fontweight='bold')
+            ax_img0.set_title(f"ORIGINAL  {true_class[:35]}", fontsize=9, fontweight='bold')
 
-            # row 1: ordered by original
-            ax_r1 = fig0.add_subplot(gs0[1, :])
-            _comparison_bars(ax_r1, cv_orig, noisy_cv,
+            # row 1: ordered by original (both rows share xlim)
+            _comparison_bars(axes0[1], cv_orig, noisy_cv,
                              C['overall'], c_noisy,
                              'Original vector', noisy_vec_lbl,
-                             order_by='a', mode=mode)
-            ax_r1.set_xlim(0, shared_xlim0)
-            ax_r1.set_title(f"Ordered by original activation  ({mode_lbl} {top_k_bars})", fontsize=8)
-            ax_r1.legend(fontsize=7, loc='lower right')
+                             order_by='a', mode=mode, xlim=shared_xlim0)
+            axes0[1].set_title(f"Ordered by original activation  ({mode_lbl} {top_k_bars})", fontsize=8)
+            axes0[1].legend(fontsize=7, loc='lower right')
 
             # row 2: ordered by noisy
-            ax_r2 = fig0.add_subplot(gs0[2, :])
-            _comparison_bars(ax_r2, noisy_cv, cv_orig,
+            _comparison_bars(axes0[2], noisy_cv, cv_orig,
                              c_noisy, C['overall'],
                              noisy_vec_lbl, 'Original vector',
-                             order_by='a', mode=mode)
-            ax_r2.set_xlim(0, shared_xlim0)
-            ax_r2.set_title(f"Ordered by noisy activation  ({mode_lbl} {top_k_bars})", fontsize=8)
-            ax_r2.legend(fontsize=7, loc='lower right')
+                             order_by='a', mode=mode, xlim=shared_xlim0)
+            axes0[2].set_title(f"Ordered by noisy activation  ({mode_lbl} {top_k_bars})", fontsize=8)
+            axes0[2].legend(fontsize=7, loc='lower right')
 
             fig0.suptitle(suptitle, fontsize=9, fontweight='bold')
             fig0.savefig(os.path.join(save_dir, f"{base}_original.png"),
@@ -1042,9 +1057,9 @@ def save_sae_retrieval_figure(target_idx, cv_orig, cv_iso, cv_mani,
                 cv_ni  = val_concept_vectors[ni].numpy()
                 lbl_ni = get_class_name(PROBE_DATASET, int(val_labels_t[ni].item()))
 
-                fig_m, axes_m = plt.subplots(1, 2, figsize=(12, 4.5),
-                                             gridspec_kw={'width_ratios': [1, 3],
-                                                          'wspace': 0.35})
+                fig_m, axes_m = plt.subplots(1, 2, figsize=(8, 3.5),
+                                             gridspec_kw={'width_ratios': [1, 2.5],
+                                                          'wspace': 0.25})
                 ax_img_m = axes_m[0]
                 img_m = _load(ni)
                 if img_m: ax_img_m.imshow(img_m)
@@ -1065,6 +1080,85 @@ def save_sae_retrieval_figure(target_idx, cv_orig, cv_iso, cv_mani,
                 fig_m.savefig(os.path.join(save_dir, f"{base}_match{mi+1}.png"),
                               dpi=150, bbox_inches='tight')
                 plt.close(fig_m)
+
+
+def save_match_grid_figure(target_idx, cv_orig, cv_iso, cv_mani,
+                            sigma, val_labels_t, val_dataset, save_dir,
+                            top_n=6):
+    """
+    Combined image grid — paper-style.
+    Layout: 3 rows × (top_n+1) cols
+
+      Row 0: original | manifold match 1 | match 2 | ... | match N
+      Row 1: (blank)  | iso      match 1 | match 2 | ... | match N
+
+    Saved as: idx{N}_match_grid.png  in save_dir
+    """
+    from PIL import Image as _PILImage
+
+    def _load(idx):
+        try:
+            if hasattr(val_dataset, 'samples'):
+                return _PILImage.open(val_dataset.samples[idx][0]).convert("RGB")
+        except Exception:
+            pass
+        return None
+
+    # retrieve
+    mani_idxs, _ = top_n_in_sae(cv_mani, n=top_n)
+    iso_idxs,  _ = top_n_in_sae(cv_iso,  n=top_n)
+
+    label_id   = int(val_labels_t[target_idx].item())
+    true_class = get_class_name(PROBE_DATASET, label_id)
+
+    # Layout:
+    #   Row 0: original image (centred, spans full width)
+    #   Row 1: manifold match 1 … match N
+    #   Row 2: isotropic match 1 … match N
+
+    fig = plt.figure(figsize=(2.2 * top_n, 7.5))
+    gs  = plt.GridSpec(3, top_n, figure=fig,
+                       height_ratios=[1.2, 1, 1],
+                       hspace=0.45, wspace=0.05)
+
+    # row 0: original image — first column only
+    ax_orig = fig.add_subplot(gs[0, 0])
+    img0 = _load(target_idx)
+    if img0: ax_orig.imshow(img0)
+    ax_orig.axis('off')
+    ax_orig.set_title(f"ORIGINAL\n{true_class[:22]}", fontsize=7, fontweight='bold')
+
+    # row 1: manifold matches
+    for mi, ni in enumerate(mani_idxs):
+        ax = fig.add_subplot(gs[1, mi])
+        img = _load(ni)
+        if img: ax.imshow(img)
+        ax.axis('off')
+        lbl = get_class_name(PROBE_DATASET, int(val_labels_t[ni].item()))
+        ax.set_title(f"Mani #{mi+1}\n{lbl[:16]}", fontsize=5.5)
+        if mi == 0:
+            ax.set_ylabel('Manifold', fontsize=6, fontweight='bold', labelpad=4)
+
+    # row 2: iso matches
+    for mi, ni in enumerate(iso_idxs):
+        ax = fig.add_subplot(gs[2, mi])
+        img = _load(ni)
+        if img: ax.imshow(img)
+        ax.axis('off')
+        lbl = get_class_name(PROBE_DATASET, int(val_labels_t[ni].item()))
+        ax.set_title(f"Iso #{mi+1}\n{lbl[:16]}", fontsize=5.5)
+        if mi == 0:
+            ax.set_ylabel('Isotropic', fontsize=6, fontweight='bold', labelpad=4)
+
+    fig.suptitle(
+        f"SAE retrieval grid  idx={target_idx}  true: {true_class}\n"
+        f"sigma={sigma}   dist_mani={float(np.linalg.norm(cv_mani - cv_orig)):.2f}"
+        f"   dist_iso={float(np.linalg.norm(cv_iso - cv_orig)):.2f}",
+        fontsize=8, fontweight='bold'
+    )
+    fig.savefig(os.path.join(save_dir, f"idx{target_idx}_match_grid.png"),
+                dpi=150, bbox_inches='tight')
+    plt.close(fig)
 
 
 # ===========================================================================
@@ -1506,7 +1600,7 @@ if VIZ_ONLY:
                     dpi=150, bbox_inches='tight')
         plt.close(fig_bg)
 
-        # ── SAE-space retrieval figure ────────
+        # ── SAE-space retrieval + match grid figures ─────────────────────────
         if probe_val_dataset is not None:
             cv_noisy_m = (cv_whitened + np.random.normal(0, alpha, size=len(ev))) @ (np.sqrt(ev)[:, None] * Vt) + mean_nn
             cv_noisy_g = cv_orig + np.random.normal(0, gauss_sigma, size=cv_orig.shape)
@@ -1516,9 +1610,14 @@ if VIZ_ONLY:
                 'Manifold vs Isotropic',
                 os.path.join(manifold_dir, f"idx{target_idx}_sae_retrieval.png"),
                 iso_save_dir=isotropic_dir, mani_save_dir=manifold_dir)
-            print(f"  Saved SAE retrieval figures for idx {target_idx} (VIZ_ONLY)", flush=True)
+            # combined image grid saved in manifold_dir (covers both methods)
+            save_match_grid_figure(
+                target_idx, cv_orig, cv_noisy_g, cv_noisy_m,
+                round(SCALE_WEIGHT, 3), val_labels, probe_val_dataset,
+                manifold_dir)
+            print(f"  Saved SAE retrieval + match grid for idx {target_idx} (VIZ_ONLY)", flush=True)
         else:
-            print(f"  WARNING: probe_val_dataset is None — SAE retrieval figure skipped (VIZ_ONLY)", flush=True)
+            print(f"  WARNING: probe_val_dataset is None — SAE figures skipped (VIZ_ONLY)", flush=True)
 
         print(f"  Saved viz for idx {target_idx} (VIZ_ONLY)", flush=True)
         viz_count += 1
@@ -2108,13 +2207,11 @@ for loop_i, target_idx in enumerate(TARGET_IDCS if not VIZ_ONLY else []):
                     dpi=150, bbox_inches='tight')
         plt.close(fig_m)
 
-        # SAE-space retrieval figure (no decoder, direct [8192] cosine search)
+        # SAE-space retrieval + match grid figures
         if probe_val_dataset is not None:
             cv_noisy_m_ex = cv_whitened + np.random.normal(0, alpha, size=len(ev))
             cv_noisy_m_ex = cv_noisy_m_ex @ (np.sqrt(ev)[:, None] * Vt) + mean_nn
             cv_noisy_g_ex = cv_orig + np.random.normal(0, gauss_sigma, size=cv_orig.shape)
-            # iso figures → isotropic_dir, mani figures → manifold_dir
-            # function appends _{iso/manifold}_{top/least}.png to the base path
             save_sae_retrieval_figure(
                 target_idx, cv_orig, cv_noisy_g_ex, cv_noisy_m_ex,
                 round(SCALE_WEIGHT, 3), val_labels, probe_val_dataset,
@@ -2122,9 +2219,14 @@ for loop_i, target_idx in enumerate(TARGET_IDCS if not VIZ_ONLY else []):
                 os.path.join(isotropic_dir, f"idx{target_idx}_sae_retrieval.png"),
                 iso_save_dir=isotropic_dir, mani_save_dir=manifold_dir,
             )
-            print(f"  Saved SAE retrieval figures for idx {target_idx}", flush=True)
+            # combined image grid: original + manifold matches + iso matches
+            save_match_grid_figure(
+                target_idx, cv_orig, cv_noisy_g_ex, cv_noisy_m_ex,
+                round(SCALE_WEIGHT, 3), val_labels, probe_val_dataset,
+                manifold_dir)
+            print(f"  Saved SAE retrieval + match grid for idx {target_idx}", flush=True)
         else:
-            print(f"  WARNING: probe_val_dataset is None — SAE retrieval figure skipped for idx {target_idx}", flush=True)
+            print(f"  WARNING: probe_val_dataset is None — SAE figures skipped for idx {target_idx}", flush=True)
 
         # Manifold JSON
         manifold_result = {
