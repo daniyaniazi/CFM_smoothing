@@ -1151,7 +1151,7 @@ def save_match_grid_figure(target_idx, cv_orig, cv_iso, cv_mani,
             ax.set_ylabel('Isotropic', fontsize=6, fontweight='bold', labelpad=4)
 
     fig.suptitle(
-        f"SAE retrieval grid  idx={target_idx}  true: {true_class}\n"
+        f"SAE Space Match  idx={target_idx}  true: {true_class}\n"
         f"sigma={sigma}   dist_mani={float(np.linalg.norm(cv_mani - cv_orig)):.2f}"
         f"   dist_iso={float(np.linalg.norm(cv_iso - cv_orig)):.2f}",
         fontsize=8, fontweight='bold'
