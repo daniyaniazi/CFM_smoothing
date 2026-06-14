@@ -921,56 +921,62 @@ def save_sae_retrieval_figure(target_idx, cv_orig, cv_iso, cv_mani,
     label_id   = int(val_labels_t[target_idx].item())
     true_class = get_class_name(PROBE_DATASET, label_id)
 
-    def _single_bars(ax, cv, color, title, mode='top'):
+    def _effect_bars(ax, cv_orig_v, cv_noisy_v, c_noisy, title, mode='top'):
         """
-        Reference paper style:
-        - concept name INSIDE bar in white
-        - activation number to the RIGHT of bar
-        - NO axes, NO ticks, NO spines — clean white background
+        Shows the effect of smoothing on original concepts.
+
+        Ordering: always by ORIGINAL vector (top-k or least-k active).
+        Green bar  = original activation for each concept
+        Colored bar = noisy activation for the SAME concept
+
+        This makes it immediately clear what the noise did to each concept.
+        Top mode:   original's highest-k concepts, sorted descending
+        Least mode: original's lowest-k ACTIVE concepts, sorted ascending
         """
-        cv = np.array(cv)
+        orig  = np.array(cv_orig_v)
+        noisy = np.array(cv_noisy_v)
+
         if mode == 'top':
-            idxs = np.argsort(-cv)[:top_k_bars]
+            idxs  = np.argsort(-orig)[:top_k_bars]
+            order = np.argsort(orig[idxs])[::-1]   # descending
         else:
-            active = np.where(cv > 1e-6)[0]
+            active = np.where(orig > 1e-6)[0]
             if len(active) == 0:
                 ax.text(0.5, 0.5, 'no active concepts', ha='center', va='center',
                         transform=ax.transAxes, fontsize=8)
-                ax.set_title(title, fontsize=6.5, pad=2, fontweight='normal')
+                ax.set_title(title, fontsize=6.5, pad=2)
                 ax.axis('off')
                 return
-            idxs = active[np.argsort(cv[active])[:top_k_bars]]
+            idxs  = active[np.argsort(orig[active])[:top_k_bars]]
+            order = np.argsort(orig[idxs])          # ascending (least first at bottom)
 
-        vals  = cv[idxs]
-        names = [(concept_names[i] if concept_names else f"c{i}")[:22] for i in idxs]
-        order = np.argsort(vals)[::-1]
+        orig_vals  = orig[idxs][order]
+        noisy_vals = noisy[idxs][order]
+        names = [(concept_names[i] if concept_names else f"c{i}")[:20]
+                 for i in idxs[order]]
 
-        y    = np.arange(len(idxs))
-        bars = ax.barh(y, vals[order], height=0.75, color=color, alpha=0.88)
+        y, h = np.arange(len(idxs)), 0.35
+        ax.barh(y - h/2, orig_vals,  height=h, color='#1b7837', alpha=0.85, label='Original')
+        ax.barh(y + h/2, noisy_vals, height=h, color=c_noisy,   alpha=0.85, label='Noisy')
         ax.invert_yaxis()
+        ax.set_yticks(y)
+        ax.set_yticklabels(names, fontsize=6.5)
 
-        vmax = float(vals.max()) if len(vals) > 0 else 0.01
-        xmax = vmax * 1.4
-
-        for i, (bar, val) in enumerate(zip(bars, vals[order])):
-            name = names[order[i]]
-            # concept name inside bar — white, left-padded
-            ax.text(vmax * 0.02, bar.get_y() + bar.get_height() / 2,
-                    name, va='center', ha='left', fontsize=7,
-                    color='white', clip_on=True)
-            # number outside bar — dark
-            txt = f"{val:.2f}" if val >= 0.01 else f"{val:.2e}"
-            ax.text(bar.get_width() + vmax * 0.03,
-                    bar.get_y() + bar.get_height() / 2,
-                    txt, va='center', ha='left', fontsize=7,
-                    color='#222', clip_on=True)
-
+        vmax = max(float(orig_vals.max()), float(noisy_vals.max()), 0.001)
+        xmax = vmax * 1.35
         ax.set_xlim(0, xmax)
-        ax.set_yticks([])
+
+        for yi, (ov, nv) in enumerate(zip(orig_vals, noisy_vals)):
+            for val, yoff in [(ov, -h/2), (nv, h/2)]:
+                txt = f"{val:.2f}" if val >= 0.01 else f"{val:.2e}"
+                ax.text(min(val + vmax*0.02, xmax*0.98), yi + yoff,
+                        txt, va='center', ha='left', fontsize=6, color='#222', clip_on=True)
+
         ax.set_xticks([])
         for sp in ax.spines.values():
             sp.set_visible(False)
-        ax.set_title(title, fontsize=6.5, pad=2, fontweight='normal')
+        ax.set_title(title, fontsize=6.5, pad=2)
+        ax.legend(fontsize=6, loc='lower right', frameon=False)
 
     def _comparison_bars(ax, cv_a, cv_b, color_a, color_b,
                          label_a, label_b, order_by='a', mode='top', xlim=None):
@@ -1064,20 +1070,20 @@ def save_sae_retrieval_figure(target_idx, cv_orig, cv_iso, cv_mani,
             # Row 0: original image (small, natural ratio)
             # Row 1: single bars — original cv ordered by original
             # Row 2: single bars — noisy cv ordered by noisy
-            fig0, axes0 = plt.subplots(3, 1, figsize=(5, 7.5),
-                                        gridspec_kw={'height_ratios': [1.0, 2, 2],
-                                                     'hspace': 0.5})
+            fig0, axes0 = plt.subplots(2, 1, figsize=(5, 6.0),
+                                        gridspec_kw={'height_ratios': [0.8, 3],
+                                                     'hspace': 0.4})
             ax_img0 = axes0[0]
             img0 = _load(target_idx)
             if img0:
                 ax_img0.imshow(img0)
             ax_img0.axis('off')
-            ax_img0.set_title(f"ORIGINAL  {true_class[:30]}", fontsize=7, fontweight='normal')
+            ax_img0.set_title(f"ORIGINAL  {true_class[:30]}", fontsize=7)
 
-            _single_bars(axes0[1], cv_orig, C['overall'],
-                         f"Original concept activations  ({mode_lbl} {top_k_bars})", mode)
-            _single_bars(axes0[2], noisy_cv, c_noisy,
-                         f"{noisy_label} noisy activations  ({mode_lbl} {top_k_bars})", mode)
+            # single combined panel: original ordering, green=orig, colored=noisy
+            _effect_bars(axes0[1], cv_orig, noisy_cv, c_noisy,
+                         f"Effect of {noisy_label} smoothing on original {mode_lbl} {top_k_bars} concepts",
+                         mode)
 
             fig0.suptitle(suptitle, fontsize=7, fontweight='normal', y=0.99)
             fig0.savefig(os.path.join(save_dir, f"{base}_original.png"),
@@ -1089,24 +1095,22 @@ def save_sae_retrieval_figure(target_idx, cv_orig, cv_iso, cv_mani,
                 cv_ni  = val_concept_vectors[ni].numpy()
                 lbl_ni = get_class_name(PROBE_DATASET, int(val_labels_t[ni].item()))
 
-                fig_m = plt.figure(figsize=(9, 5.0))
-                gs_m  = plt.GridSpec(1, 3, figure=fig_m,
-                                     width_ratios=[1, 2, 2],
-                                     wspace=0.35,
-                                     top=0.72, bottom=0.04)   # room for suptitle + bar panel titles
+                fig_m = plt.figure(figsize=(8, 5.0))
+                gs_m  = plt.GridSpec(1, 2, figure=fig_m,
+                                     width_ratios=[1, 2.5],
+                                     wspace=0.3,
+                                     top=0.72, bottom=0.04)
 
                 ax_img_m = fig_m.add_subplot(gs_m[0])
                 img_m = _load(ni)
                 if img_m: ax_img_m.imshow(img_m)
                 ax_img_m.axis('off')
-                ax_img_m.set_title(f"Match #{mi+1}\n{lbl_ni[:22]}", fontsize=7, fontweight='normal')
+                ax_img_m.set_title(f"Match #{mi+1}\n{lbl_ni[:22]}", fontsize=7)
 
-                # matched image TRUE bars
-                _single_bars(fig_m.add_subplot(gs_m[1]), cv_ni, C['overall'],
-                             f"Matched #{mi+1} true concepts  ({mode_lbl})", mode)
-                # noisy query bars
-                _single_bars(fig_m.add_subplot(gs_m[2]), noisy_cv, c_noisy,
-                             f"{noisy_label} noisy activations  ({mode_lbl})", mode)
+                # green=matched image's concept, colored=noisy query's same concept
+                _effect_bars(fig_m.add_subplot(gs_m[1]), cv_ni, noisy_cv, c_noisy,
+                             f"Matched #{mi+1}: effect of {noisy_label} noise  ({mode_lbl})",
+                             mode)
 
                 fig_m.suptitle(suptitle, fontsize=7, fontweight='normal', y=0.99)
                 fig_m.savefig(os.path.join(save_dir, f"{base}_match{mi+1}.png"),
