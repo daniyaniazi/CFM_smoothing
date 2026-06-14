@@ -959,18 +959,27 @@ def save_sae_retrieval_figure(target_idx, cv_orig, cv_iso, cv_mani,
         ax.barh(y - h/2, orig_vals,  height=h, color='#1b7837', alpha=0.85, label='Original')
         ax.barh(y + h/2, noisy_vals, height=h, color=c_noisy,   alpha=0.85, label='Noisy')
         ax.invert_yaxis()
-        ax.set_yticks(y)
-        ax.set_yticklabels(names, fontsize=6.5)
+        ax.set_yticks([])   # no y-tick labels — names go inside bars
 
         vmax = max(float(orig_vals.max()), float(noisy_vals.max()), 0.001)
         xmax = vmax * 1.35
         ax.set_xlim(0, xmax)
 
-        for yi, (ov, nv) in enumerate(zip(orig_vals, noisy_vals)):
-            for val, yoff in [(ov, -h/2), (nv, h/2)]:
-                txt = f"{val:.2f}" if val >= 0.01 else f"{val:.2e}"
-                ax.text(min(val + vmax*0.02, xmax*0.98), yi + yoff,
-                        txt, va='center', ha='left', fontsize=6, color='#222', clip_on=True)
+        for yi, (name, ov, nv) in enumerate(zip(names, orig_vals, noisy_vals)):
+            # concept name inside green bar — white text
+            ax.text(vmax * 0.015, yi - h/2,
+                    name, va='center', ha='left', fontsize=6.5,
+                    color='white', clip_on=True)
+            # original number: at end of green bar, above it
+            txt_o = f"{ov:.2f}" if ov >= 0.01 else f"{ov:.2e}"
+            ax.text(ov + vmax * 0.02, yi - h/2,
+                    txt_o, va='center', ha='left', fontsize=6,
+                    color='#222', clip_on=True)
+            # noisy number: at end of noisy bar, below it — only if meaningfully different
+            txt_n = f"{nv:.2f}" if nv >= 0.01 else f"{nv:.2e}"
+            ax.text(nv + vmax * 0.02, yi + h/2,
+                    txt_n, va='center', ha='left', fontsize=6,
+                    color='#222', clip_on=True)
 
         ax.set_xticks([])
         for sp in ax.spines.values():
