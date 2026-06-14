@@ -936,7 +936,7 @@ def save_sae_retrieval_figure(target_idx, cv_orig, cv_iso, cv_mani,
             if len(active) == 0:
                 ax.text(0.5, 0.5, 'no active concepts', ha='center', va='center',
                         transform=ax.transAxes, fontsize=8)
-                ax.set_title(title, fontsize=7, pad=3)
+                ax.set_title(title, fontsize=6.5, pad=2, fontweight='normal')
                 ax.axis('off')
                 return
             idxs = active[np.argsort(cv[active])[:top_k_bars]]
@@ -970,7 +970,7 @@ def save_sae_retrieval_figure(target_idx, cv_orig, cv_iso, cv_mani,
         ax.set_xticks([])
         for sp in ax.spines.values():
             sp.set_visible(False)
-        ax.set_title(title, fontsize=7, pad=3)
+        ax.set_title(title, fontsize=6.5, pad=2, fontweight='normal')
 
     def _comparison_bars(ax, cv_a, cv_b, color_a, color_b,
                          label_a, label_b, order_by='a', mode='top', xlim=None):
@@ -1072,14 +1072,14 @@ def save_sae_retrieval_figure(target_idx, cv_orig, cv_iso, cv_mani,
             if img0:
                 ax_img0.imshow(img0)
             ax_img0.axis('off')
-            ax_img0.set_title(f"ORIGINAL  {true_class[:30]}", fontsize=8, fontweight='bold')
+            ax_img0.set_title(f"ORIGINAL  {true_class[:30]}", fontsize=7, fontweight='normal')
 
             _single_bars(axes0[1], cv_orig, C['overall'],
                          f"Original concept activations  ({mode_lbl} {top_k_bars})", mode)
             _single_bars(axes0[2], noisy_cv, c_noisy,
                          f"{noisy_label} noisy activations  ({mode_lbl} {top_k_bars})", mode)
 
-            fig0.suptitle(suptitle, fontsize=8, fontweight='bold')
+            fig0.suptitle(suptitle, fontsize=7, fontweight='normal', y=0.99)
             fig0.savefig(os.path.join(save_dir, f"{base}_original.png"),
                          dpi=150, bbox_inches='tight')
             plt.close(fig0)
@@ -1098,7 +1098,7 @@ def save_sae_retrieval_figure(target_idx, cv_orig, cv_iso, cv_mani,
                 img_m = _load(ni)
                 if img_m: ax_img_m.imshow(img_m)
                 ax_img_m.axis('off')
-                ax_img_m.set_title(f"Match #{mi+1}\n{lbl_ni[:20]}", fontsize=8, fontweight='bold')
+                ax_img_m.set_title(f"Match #{mi+1}\n{lbl_ni[:22]}", fontsize=7, fontweight='normal')
 
                 # matched image TRUE bars
                 _single_bars(fig_m.add_subplot(gs_m[1]), cv_ni, C['overall'],
@@ -1107,7 +1107,7 @@ def save_sae_retrieval_figure(target_idx, cv_orig, cv_iso, cv_mani,
                 _single_bars(fig_m.add_subplot(gs_m[2]), noisy_cv, c_noisy,
                              f"{noisy_label} noisy activations  ({mode_lbl})", mode)
 
-                fig_m.suptitle(suptitle, fontsize=8, fontweight='bold')
+                fig_m.suptitle(suptitle, fontsize=7, fontweight='normal', y=0.99)
                 fig_m.savefig(os.path.join(save_dir, f"{base}_match{mi+1}.png"),
                               dpi=150, bbox_inches='tight')
                 plt.close(fig_m)
