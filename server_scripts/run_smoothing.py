@@ -1089,11 +1089,11 @@ def save_sae_retrieval_figure(target_idx, cv_orig, cv_iso, cv_mani,
                 cv_ni  = val_concept_vectors[ni].numpy()
                 lbl_ni = get_class_name(PROBE_DATASET, int(val_labels_t[ni].item()))
 
-                fig_m = plt.figure(figsize=(9, 4.2))
+                fig_m = plt.figure(figsize=(9, 5.0))
                 gs_m  = plt.GridSpec(1, 3, figure=fig_m,
                                      width_ratios=[1, 2, 2],
                                      wspace=0.35,
-                                     top=0.78)   # leave room for suptitle
+                                     top=0.72, bottom=0.04)   # room for suptitle + bar panel titles
 
                 ax_img_m = fig_m.add_subplot(gs_m[0])
                 img_m = _load(ni)
