@@ -76,15 +76,15 @@ C = {
     'match':        '#1b7837',   # dark green    — matched image concepts (same as original)
     # iso: blue shades
     'iso_top':      '#2166ac',   # deep blue     — iso top activated
-    'iso_least':    '#9ecae1',   # light blue    — iso least activated
+    'iso_least':    '#d4b483',   # warm sand     — iso least activated (clearly different)
     'iso_bar':      '#2166ac',   # deep blue     — iso noisy query (SAE retrieval)
-    # mani: purple shades
+    # mani: purple top, amber least
     'mani_top':     '#6b3fa0',   # dark purple   — mani top activated
-    'mani_least':   '#c6a8e0',   # light purple  — mani least activated
+    'mani_least':   '#e08214',   # amber/orange  — mani least activated (clearly different)
     'mani_bar':     '#6b3fa0',   # dark purple   — mani noisy query (SAE retrieval)
     # activation dist boxplots
     'dist_top':     '#6b3fa0',   # dark purple   — top concepts
-    'dist_least':   '#c6a8e0',   # light purple  — least concepts
+    'dist_least':   '#e08214',   # amber         — least concepts (warm vs cool = clear contrast)
     'dist_new':     '#2166ac',   # deep blue     — new concepts
 }
 
@@ -809,40 +809,34 @@ print(f"Loaded KNN index from {index_path}", flush=True)
 #   → load and display that image
 #   The image shown is whatever val image has the closest concept vector to the query.
 
-print("Building SAE concept-space gallery (L2-normalised val vectors)...", flush=True)
-sae_concept_gallery = F.normalize(
-    val_concept_vectors.to(args.device), dim=-1   # [50000, 8192]
-)
-# Why normalise: cosine sim = dot product of unit vectors — measures concept direction
-# not activation magnitude. Two images with same active concepts but different scales
-# will still be close after normalisation.
-print(f"SAE concept gallery: {sae_concept_gallery.shape}", flush=True)
+print("Building SAE concept-space gallery (raw vectors, Euclidean)...", flush=True)
+sae_gallery_raw = val_concept_vectors.to(args.device)   # [50000, 8192] — NOT normalised
+# Why NOT normalise:
+#   - Classifier uses raw dot product — magnitude matters
+#   - Annoy KNN index uses Euclidean distance — magnitude matters
+#   - L2-normalising hides iso noise effect: iso adds noise to all 8192 dims
+#     → huge L2 norm → after normalise looks similar to everything → wrong
+#   - Euclidean correctly shows iso vector landed FAR, mani stayed NEAR
+print(f"SAE gallery (raw): {sae_gallery_raw.shape}", flush=True)
 
 
-def top_n_in_sae(cv_np, n=5):
+def top_n_in_sae(cv_np, n=6):
     """
-    Retrieve top-n nearest neighbours directly in SAE concept space [8192].
-
-    Flow:
-      cv_np [8192]                         ← query: clean or noisy concept vector
-        → L2-normalise → [8192]
-        → dot product with gallery [50000, 8192]
-        → top-n indices                    ← indices into val_concept_vectors
-        → probe_val_dataset.samples[idx]   ← actual image files on disk
-
-    No decoder. No 512. Pure concept-space cosine similarity.
+    Retrieve top-n by EUCLIDEAN distance in raw concept space [8192].
+    Matches the Annoy KNN index metric used in smoothing certification.
+    No normalisation — magnitude differences from iso noise are preserved.
     """
     with torch.no_grad():
-        q = torch.tensor(cv_np, dtype=torch.float32, device=args.device)
-        q = F.normalize(q, dim=-1)
-        sims = sae_concept_gallery @ q     # [50000] cosine sims
-        top = sims.topk(n)
-    return top.indices.cpu().tolist(), top.values.cpu().tolist()
+        q     = torch.tensor(cv_np, dtype=torch.float32, device=args.device)
+        diffs = sae_gallery_raw - q.unsqueeze(0)   # [50000, 8192]
+        dists = diffs.norm(dim=1)                   # [50000] Euclidean distances
+        top   = dists.topk(n, largest=False)        # smallest distances = nearest
+    return top.indices.cpu().tolist(), (-top.values).cpu().tolist()
 
 
 def save_sae_retrieval_figure(target_idx, cv_orig, cv_iso, cv_mani,
                                sigma, val_labels_t, val_dataset,
-                               method_name, save_path, top_n=5, top_k_bars=10,
+                               method_name, save_path, top_n=6, top_k_bars=10,
                                iso_save_dir=None, mani_save_dir=None):
     """
     retrieve directly in SAE concept space [8192].
@@ -921,63 +915,118 @@ def save_sae_retrieval_figure(target_idx, cv_orig, cv_iso, cv_mani,
         ax.grid(axis='x', alpha=0.2, linestyle='--')
 
     # retrieve top-n only for noisy queries — cv_orig NOT queried (trivial self-match)
+    # top_n=6 → 3 rows × 2 cols, no empty space
     iso_idxs,  iso_sims  = top_n_in_sae(cv_iso,  n=top_n)
     mani_idxs, mani_sims = top_n_in_sae(cv_mani, n=top_n)
     label_id   = int(val_labels_t[target_idx].item())
     true_class = get_class_name(PROBE_DATASET, label_id)
 
+    def _paired_bars(ax, cv_match, cv_noisy, c_noisy, mode):
+        """Double bar: green=matched true, colored=noisy cv, ordered by matched true."""
+        cv_m = np.array(cv_match)
+        cv_n = np.array(cv_noisy)
+        if mode == 'top':
+            idxs = np.argsort(-cv_m)[:top_k_bars]
+        else:
+            active = np.where(cv_m > 1e-6)[0]
+            if len(active) == 0:
+                ax.set_visible(False)
+                return
+            idxs = active[np.argsort(cv_m[active])[:top_k_bars]]
+        true_vals  = cv_m[idxs]
+        noisy_vals = cv_n[idxs]
+        names = [(concept_names[i] if concept_names else f"c{i}")[:22] for i in idxs]
+        order = np.argsort(true_vals)[::-1]
+        y, h = np.arange(len(idxs)), 0.35
+        ax.barh(y - h/2, true_vals[order],  height=h, color='#1b7837', alpha=0.85, label='Matched (true)')
+        ax.barh(y + h/2, noisy_vals[order], height=h, color=c_noisy,   alpha=0.85, label='Noisy cv')
+        ax.set_yticks(y)
+        ax.set_yticklabels([names[i] for i in order], fontsize=6)
+        ax.invert_yaxis()
+        xmax = max(true_vals.max(), noisy_vals.max(), 0.01) * 1.3
+        for yi, (tv, nv) in enumerate(zip(true_vals[order], noisy_vals[order])):
+            ax.text(tv  + xmax*0.01, yi - h/2, f"{tv:.2f}", va='center', fontsize=5.5, color='#333')
+            ax.text(nv  + xmax*0.01, yi + h/2, f"{nv:.2f}", va='center', fontsize=5.5, color='#333')
+        ax.set_xlim(0, xmax)
+        ax.set_xlabel('Activation', fontsize=6)
+        ax.spines['top'].set_visible(False)
+        ax.spines['right'].set_visible(False)
+        ax.grid(axis='x', alpha=0.2, linestyle='--')
+        ax.legend(fontsize=6, loc='lower right')
+
+    def _orig_bar(ax, cv_np, title, color, mode):
+        cv = np.array(cv_np)
+        idxs = np.argsort(-cv)[:top_k_bars] if mode == 'top' else \
+               np.where(cv > 1e-6)[0][np.argsort(cv[np.where(cv > 1e-6)[0]])[:top_k_bars]]
+        vals  = cv[idxs]
+        names = [(concept_names[i] if concept_names else f"c{i}")[:22] for i in idxs]
+        order = np.argsort(vals)[::-1]
+        y     = np.arange(len(idxs))
+        bars  = ax.barh(y, vals[order], color=color, alpha=0.85)
+        ax.set_yticks(y); ax.set_yticklabels([names[i] for i in order], fontsize=6)
+        ax.invert_yaxis()
+        xmax = (vals.max() or 1) * 1.25
+        for bar, v in zip(bars, vals[order]):
+            ax.text(bar.get_width() + xmax*0.01, bar.get_y() + bar.get_height()/2,
+                    f"{v:.2f}", va='center', fontsize=6, color='#333')
+        ax.set_xlim(0, xmax); ax.set_xlabel('Activation', fontsize=6)
+        ax.set_title(title, fontsize=7, fontweight='bold')
+        ax.spines['top'].set_visible(False); ax.spines['right'].set_visible(False)
+        ax.grid(axis='x', alpha=0.2, linestyle='--')
+
+    # Euclidean distances — shows how far each method moved from the original
+    dist_iso  = float(np.linalg.norm(cv_iso  - cv_orig))
+    dist_mani = float(np.linalg.norm(cv_mani - cv_orig))
+
     for mode in ['top', 'least']:
-        for noisy_cv, noisy_idxs, noisy_sims, noisy_label, c_noisy in [
-            (cv_iso,  iso_idxs,  iso_sims,  'Iso',      C['iso_bar']),
-            (cv_mani, mani_idxs, mani_sims, 'Manifold', C['mani_bar']),
+        for noisy_cv, noisy_idxs, noisy_sims, noisy_label, c_noisy, dist in [
+            (cv_iso,  iso_idxs,  iso_sims,  'Iso',      C['iso_bar'],  dist_iso),
+            (cv_mani, mani_idxs, mani_sims, 'Manifold', C['mani_bar'], dist_mani),
         ]:
-            # compute shared x-axis across all bar panels in this figure
-            all_vals = list(_get_bar_vals(cv_orig, mode)) + list(_get_bar_vals(noisy_cv, mode))
-            for ni in noisy_idxs:
-                all_vals += list(_get_bar_vals(val_concept_vectors[ni].numpy(), mode))
-            shared_xlim = float(max(all_vals)) * 1.25 if all_vals else 1.0
+            n_match_rows = int(np.ceil(top_n / 2))   # 6 → 3 rows
+            fig = plt.figure(figsize=(18, 3.5 + 3.2 * n_match_rows))
 
-            n_rows = top_n + 1
-            fig = plt.figure(figsize=(15, 3.0 * n_rows))
-            gs  = gridspec.GridSpec(n_rows, 3, figure=fig,
-                                    width_ratios=[1, 2.5, 2.5],
-                                    hspace=0.65, wspace=0.45)
-
-            # Row 0: original image + original concept bars (fixed reference)
-            ax0 = fig.add_subplot(gs[0, 0])
+            # Row 0: original image + original bars + noisy bars
+            gs0 = gridspec.GridSpec(1, 3, figure=fig,
+                                    left=0.02, right=0.98, top=0.92,
+                                    bottom=1 - (3.5 / (3.5 + 3.2 * n_match_rows)) * 0.85,
+                                    width_ratios=[1, 2.5, 2.5], wspace=0.35)
+            ax0 = fig.add_subplot(gs0[0])
             img0 = _load(target_idx)
             if img0: ax0.imshow(img0)
             ax0.axis('off')
             ax0.set_title(f"ORIGINAL\n{true_class[:22]}", fontsize=7, fontweight='bold')
-            _concept_bars(fig.add_subplot(gs[0, 1]),
-                          cv_orig,  "Original concept activations", C['overall'], mode=mode,
-                          xlim=shared_xlim)
-            _concept_bars(fig.add_subplot(gs[0, 2]),
-                          noisy_cv, f"{noisy_label} noisy activations", c_noisy, mode=mode,
-                          xlim=shared_xlim)
+            _orig_bar(fig.add_subplot(gs0[1]), cv_orig,  "Original concept activations", C['overall'], mode)
+            _orig_bar(fig.add_subplot(gs0[2]), noisy_cv, f"{noisy_label} noisy activations", c_noisy,  mode)
 
-            # Rows 1-top_n: top-n SAE matches of the noisy query
-            for row, (ni, sim_val) in enumerate(zip(noisy_idxs, noisy_sims), start=1):
-                ax_img = fig.add_subplot(gs[row, 0])
+            # Rows 1+: 2 matches per row — image | paired bars | image | paired bars
+            top_frac = 3.5 / (3.5 + 3.2 * n_match_rows)
+            gs1 = gridspec.GridSpec(n_match_rows, 4, figure=fig,
+                                    left=0.02, right=0.98,
+                                    top=1 - top_frac * 1.05, bottom=0.04,
+                                    width_ratios=[0.5, 2.0, 0.5, 2.0],
+                                    hspace=0.6, wspace=0.35)
+            for mi, (ni, sim_val) in enumerate(zip(noisy_idxs, noisy_sims)):
+                r, col_img, col_bar = mi // 2, (mi % 2) * 2, (mi % 2) * 2 + 1
+                ax_img = fig.add_subplot(gs1[r, col_img])
                 img = _load(ni)
                 if img: ax_img.imshow(img)
                 ax_img.axis('off')
                 lbl = get_class_name(PROBE_DATASET, int(val_labels_t[ni].item()))
-                ax_img.set_title(f"Match #{row}  sim={sim_val:.3f}\n{lbl[:22]}", fontsize=6.5)
-
+                ax_img.set_title(f"Match #{mi+1}\n{lbl[:20]}", fontsize=6)  # no sim score
                 cv_ni = val_concept_vectors[ni].numpy()
-                _concept_bars(fig.add_subplot(gs[row, 1]),
-                              cv_ni,    "Matched image concepts (true)", C['match'], mode=mode,
-                              xlim=shared_xlim)
-                _concept_bars(fig.add_subplot(gs[row, 2]),
-                              noisy_cv, f"{noisy_label} noisy activations", c_noisy, mode=mode,
-                              xlim=shared_xlim)
+                ax_bar = fig.add_subplot(gs1[r, col_bar])
+                _paired_bars(ax_bar, cv_ni, noisy_cv, c_noisy, mode)
+                mode_lbl = 'Top' if mode == 'top' else 'Least'
+                ax_bar.set_title(f"Match #{mi+1}  {mode_lbl} {top_k_bars}  (green=true, colored=noisy)",
+                                 fontsize=6.5, fontweight='bold')
 
             mode_lbl = 'Top' if mode == 'top' else 'Least'
             fig.suptitle(
                 f"{noisy_label} smoothing — SAE retrieval  ({mode_lbl} {top_k_bars} concepts)\n"
-                f"idx={target_idx}  true: {true_class}  σ={sigma}",
-                fontsize=10, fontweight='bold', y=1.01
+                f"idx={target_idx}  true: {true_class}  σ={sigma}  "
+                f"Euclidean dist from original = {dist:.2f}",
+                fontsize=10, fontweight='bold'
             )
             # iso figures → iso_save_dir, mani figures → mani_save_dir (if provided)
             if noisy_label == 'Iso' and iso_save_dir is not None:
