@@ -76,11 +76,11 @@ C = {
     'match':        '#1b7837',   # dark green    — matched image concepts (same as original)
     # iso: blue shades
     'iso_top':      '#2166ac',   # deep blue     — iso top activated
-    'iso_least':    '#d4b483',   # warm sand     — iso least activated (clearly different)
+    'iso_least':    '#6baed6',   # light blue    — iso least activated
     'iso_bar':      '#2166ac',   # deep blue     — iso noisy query (SAE retrieval)
     # mani: purple top, amber least
     'mani_top':     '#6b3fa0',   # dark purple   — mani top activated
-    'mani_least':   '#e08214',   # amber/orange  — mani least activated (clearly different)
+    'mani_least':   '#9e9ac8',   # light purple  — mani least activated
     'mani_bar':     '#6b3fa0',   # dark purple   — mani noisy query (SAE retrieval)
     # activation dist boxplots
     'dist_top':     '#6b3fa0',   # dark purple   — top concepts
@@ -836,7 +836,7 @@ def top_n_in_sae(cv_np, n=6):
 
 def save_sae_retrieval_figure(target_idx, cv_orig, cv_iso, cv_mani,
                                sigma, val_labels_t, val_dataset,
-                               method_name, save_path, top_n=6, top_k_bars=10,
+                               method_name, save_path, top_n=5, top_k_bars=10,
                                iso_save_dir=None, mani_save_dir=None):
     """
     retrieve directly in SAE concept space [8192].
@@ -923,8 +923,10 @@ def save_sae_retrieval_figure(target_idx, cv_orig, cv_iso, cv_mani,
 
     def _single_bars(ax, cv, color, title, mode='top'):
         """
-        Clean single-color bar chart — paper style like reference figure.
-        One bar per concept. Number at bar end. No overlap. Auto x-axis.
+        Reference paper style:
+        - concept name INSIDE bar in white
+        - activation number to the RIGHT of bar
+        - NO axes, NO ticks, NO spines — clean white background
         """
         cv = np.array(cv)
         if mode == 'top':
@@ -934,40 +936,41 @@ def save_sae_retrieval_figure(target_idx, cv_orig, cv_iso, cv_mani,
             if len(active) == 0:
                 ax.text(0.5, 0.5, 'no active concepts', ha='center', va='center',
                         transform=ax.transAxes, fontsize=8)
-                ax.set_title(title, fontsize=8, fontweight='bold')
+                ax.set_title(title, fontsize=7, pad=3)
                 ax.axis('off')
                 return
             idxs = active[np.argsort(cv[active])[:top_k_bars]]
 
         vals  = cv[idxs]
-        names = [(concept_names[i] if concept_names else f"c{i}")[:18] for i in idxs]
-        order = np.argsort(vals)[::-1]   # descending — highest at top
+        names = [(concept_names[i] if concept_names else f"c{i}")[:22] for i in idxs]
+        order = np.argsort(vals)[::-1]
 
-        y = np.arange(len(idxs))
-        bars = ax.barh(y, vals[order], height=0.6, color=color, alpha=0.85)
-        ax.set_yticks(y)
-        ax.set_yticklabels([names[i] for i in order], fontsize=7)
+        y    = np.arange(len(idxs))
+        bars = ax.barh(y, vals[order], height=0.75, color=color, alpha=0.88)
         ax.invert_yaxis()
 
-        # x-axis: tight to actual data, not over-extended
         vmax = float(vals.max()) if len(vals) > 0 else 0.01
-        xmax = vmax * 1.25 if vmax > 0 else 1.0
-        ax.set_xlim(0, xmax)
+        xmax = vmax * 1.4
 
-        # number at end of bar, always visible, no overlap with axis edge
-        for bar, val in zip(bars, vals[order]):
-            txt = f"{val:.2f}" if val >= 0.01 else f"{val:.4f}"
-            ax.text(min(bar.get_width() + vmax * 0.02, xmax * 0.99),
+        for i, (bar, val) in enumerate(zip(bars, vals[order])):
+            name = names[order[i]]
+            # concept name inside bar — white, left-padded
+            ax.text(vmax * 0.02, bar.get_y() + bar.get_height() / 2,
+                    name, va='center', ha='left', fontsize=7,
+                    color='white', clip_on=True)
+            # number outside bar — dark
+            txt = f"{val:.2f}" if val >= 0.01 else f"{val:.2e}"
+            ax.text(bar.get_width() + vmax * 0.03,
                     bar.get_y() + bar.get_height() / 2,
-                    txt, va='center', ha='left', fontsize=6.5,
-                    color='#111', clip_on=True)
+                    txt, va='center', ha='left', fontsize=7,
+                    color='#222', clip_on=True)
 
-        ax.set_xlabel('Activation', fontsize=7)
-        ax.set_title(title, fontsize=8, fontweight='bold', pad=4)
-        ax.tick_params(labelsize=7)
-        ax.spines['top'].set_visible(False)
-        ax.spines['right'].set_visible(False)
-        ax.grid(axis='x', alpha=0.2, linestyle='--')
+        ax.set_xlim(0, xmax)
+        ax.set_yticks([])
+        ax.set_xticks([])
+        for sp in ax.spines.values():
+            sp.set_visible(False)
+        ax.set_title(title, fontsize=7, pad=3)
 
     def _comparison_bars(ax, cv_a, cv_b, color_a, color_b,
                          label_a, label_b, order_by='a', mode='top', xlim=None):
@@ -1025,8 +1028,8 @@ def save_sae_retrieval_figure(target_idx, cv_orig, cv_iso, cv_mani,
             noisy_vec_lbl = f"{noisy_label} noisy vector"
             suptitle = (
                 f"{noisy_label} smoothing  {mode_lbl} {top_k_bars} concepts\n"
-                f"idx={target_idx}  true: {true_class}  sigma={sigma}\n"
-                f"Euclidean dist from original = {dist:.2f}"
+                f"true: {true_class}  sigma={sigma}\n"
+                f"L2 distance from original = {dist:.2f}"
             )
             base = f"idx{target_idx}_sae_retrieval_{noisy_label.lower()}_{mode}"
 
@@ -1061,9 +1064,9 @@ def save_sae_retrieval_figure(target_idx, cv_orig, cv_iso, cv_mani,
             # Row 0: original image (small, natural ratio)
             # Row 1: single bars — original cv ordered by original
             # Row 2: single bars — noisy cv ordered by noisy
-            fig0, axes0 = plt.subplots(3, 1, figsize=(5, 7),
-                                        gridspec_kw={'height_ratios': [0.7, 2, 2],
-                                                     'hspace': 0.55})
+            fig0, axes0 = plt.subplots(3, 1, figsize=(5, 7.5),
+                                        gridspec_kw={'height_ratios': [1.0, 2, 2],
+                                                     'hspace': 0.5})
             ax_img0 = axes0[0]
             img0 = _load(target_idx)
             if img0:
@@ -1112,7 +1115,7 @@ def save_sae_retrieval_figure(target_idx, cv_orig, cv_iso, cv_mani,
 
 def save_match_grid_figure(target_idx, cv_orig, cv_iso, cv_mani,
                             sigma, val_labels_t, val_dataset, save_dir,
-                            top_n=6):
+                            top_n=5):
     """
     Combined image grid — paper-style.
     Layout: 3 rows × (top_n+1) cols
@@ -1144,17 +1147,18 @@ def save_match_grid_figure(target_idx, cv_orig, cv_iso, cv_mani,
     #   Row 1: manifold match 1 … match N
     #   Row 2: isotropic match 1 … match N
 
-    fig = plt.figure(figsize=(2.2 * top_n, 7.5))
+    # 5 matches per row — bigger cells → more visible images
+    fig = plt.figure(figsize=(2.8 * top_n, 8.0))
     gs  = plt.GridSpec(3, top_n, figure=fig,
-                       height_ratios=[1.2, 1, 1],
-                       hspace=0.45, wspace=0.05)
+                       height_ratios=[1.3, 1, 1],
+                       hspace=0.5, wspace=0.08)
 
     # row 0: original image — first column only
     ax_orig = fig.add_subplot(gs[0, 0])
     img0 = _load(target_idx)
     if img0: ax_orig.imshow(img0)
     ax_orig.axis('off')
-    ax_orig.set_title(f"ORIGINAL\n{true_class[:22]}", fontsize=7, fontweight='bold')
+    ax_orig.set_title(f"ORIGINAL\n{true_class[:22]}", fontsize=8, fontweight='bold')
 
     # row 1: manifold matches
     for mi, ni in enumerate(mani_idxs):
@@ -1163,7 +1167,7 @@ def save_match_grid_figure(target_idx, cv_orig, cv_iso, cv_mani,
         if img: ax.imshow(img)
         ax.axis('off')
         lbl = get_class_name(PROBE_DATASET, int(val_labels_t[ni].item()))
-        ax.set_title(f"Mani #{mi+1}\n{lbl[:16]}", fontsize=5.5)
+        ax.set_title(f"Mani #{mi+1}\n{lbl[:16]}", fontsize=6, fontweight='bold')
         if mi == 0:
             ax.set_ylabel('Manifold', fontsize=6, fontweight='bold', labelpad=4)
 
@@ -1174,7 +1178,7 @@ def save_match_grid_figure(target_idx, cv_orig, cv_iso, cv_mani,
         if img: ax.imshow(img)
         ax.axis('off')
         lbl = get_class_name(PROBE_DATASET, int(val_labels_t[ni].item()))
-        ax.set_title(f"Iso #{mi+1}\n{lbl[:16]}", fontsize=5.5)
+        ax.set_title(f"Iso #{mi+1}\n{lbl[:16]}", fontsize=6, fontweight='bold')
         if mi == 0:
             ax.set_ylabel('Isotropic', fontsize=6, fontweight='bold', labelpad=4)
 
