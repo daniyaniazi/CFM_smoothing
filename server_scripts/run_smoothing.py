@@ -921,122 +921,150 @@ def save_sae_retrieval_figure(target_idx, cv_orig, cv_iso, cv_mani,
     label_id   = int(val_labels_t[target_idx].item())
     true_class = get_class_name(PROBE_DATASET, label_id)
 
-    def _paired_bars(ax, cv_match, cv_noisy, c_noisy, mode):
-        """Double bar: green=matched true, colored=noisy cv, ordered by matched true."""
-        cv_m = np.array(cv_match)
-        cv_n = np.array(cv_noisy)
+    def _comparison_bars(ax, cv_a, cv_b, color_a, color_b,
+                         label_a, label_b, order_by='a', mode='top'):
+        """Double bar: cv_a and cv_b on same concepts, sorted by order_by."""
+        cv_a, cv_b = np.array(cv_a), np.array(cv_b)
+        ref = cv_a if order_by == 'a' else cv_b
         if mode == 'top':
-            idxs = np.argsort(-cv_m)[:top_k_bars]
+            idxs = np.argsort(-ref)[:top_k_bars]
         else:
-            active = np.where(cv_m > 1e-6)[0]
+            active = np.where(ref > 1e-6)[0]
             if len(active) == 0:
                 ax.set_visible(False)
                 return
-            idxs = active[np.argsort(cv_m[active])[:top_k_bars]]
-        true_vals  = cv_m[idxs]
-        noisy_vals = cv_n[idxs]
-        names = [(concept_names[i] if concept_names else f"c{i}")[:22] for i in idxs]
-        order = np.argsort(true_vals)[::-1]
-        y, h = np.arange(len(idxs)), 0.35
-        ax.barh(y - h/2, true_vals[order],  height=h, color='#1b7837', alpha=0.85, label='Matched (true)')
-        ax.barh(y + h/2, noisy_vals[order], height=h, color=c_noisy,   alpha=0.85, label='Noisy cv')
+            idxs = active[np.argsort(ref[active])[:top_k_bars]]
+        vals_a = cv_a[idxs]
+        vals_b = cv_b[idxs]
+        names  = [(concept_names[i] if concept_names else f"c{i}")[:22] for i in idxs]
+        order  = np.argsort(ref[idxs])[::-1]
+        y, h   = np.arange(len(idxs)), 0.35
+        ax.barh(y - h/2, vals_a[order], height=h, color=color_a, alpha=0.85, label=label_a)
+        ax.barh(y + h/2, vals_b[order], height=h, color=color_b, alpha=0.85, label=label_b)
         ax.set_yticks(y)
         ax.set_yticklabels([names[i] for i in order], fontsize=6)
         ax.invert_yaxis()
-        xmax = max(true_vals.max(), noisy_vals.max(), 0.01) * 1.3
-        for yi, (tv, nv) in enumerate(zip(true_vals[order], noisy_vals[order])):
-            ax.text(tv  + xmax*0.01, yi - h/2, f"{tv:.2f}", va='center', fontsize=5.5, color='#333')
-            ax.text(nv  + xmax*0.01, yi + h/2, f"{nv:.2f}", va='center', fontsize=5.5, color='#333')
+        xmax = max(vals_a.max(), vals_b.max(), 0.01) * 1.3
+        for yi, (va, vb) in enumerate(zip(vals_a[order], vals_b[order])):
+            ax.text(va + xmax*0.01, yi - h/2, f"{va:.2f}", va='center', fontsize=5.5, color='#333')
+            ax.text(vb + xmax*0.01, yi + h/2, f"{vb:.2f}", va='center', fontsize=5.5, color='#333')
         ax.set_xlim(0, xmax)
         ax.set_xlabel('Activation', fontsize=6)
         ax.spines['top'].set_visible(False)
         ax.spines['right'].set_visible(False)
         ax.grid(axis='x', alpha=0.2, linestyle='--')
-        ax.legend(fontsize=6, loc='lower right')
 
-    def _orig_bar(ax, cv_np, title, color, mode):
-        cv = np.array(cv_np)
-        idxs = np.argsort(-cv)[:top_k_bars] if mode == 'top' else \
-               np.where(cv > 1e-6)[0][np.argsort(cv[np.where(cv > 1e-6)[0]])[:top_k_bars]]
-        vals  = cv[idxs]
-        names = [(concept_names[i] if concept_names else f"c{i}")[:22] for i in idxs]
-        order = np.argsort(vals)[::-1]
-        y     = np.arange(len(idxs))
-        bars  = ax.barh(y, vals[order], color=color, alpha=0.85)
-        ax.set_yticks(y); ax.set_yticklabels([names[i] for i in order], fontsize=6)
-        ax.invert_yaxis()
-        xmax = (vals.max() or 1) * 1.25
-        for bar, v in zip(bars, vals[order]):
-            ax.text(bar.get_width() + xmax*0.01, bar.get_y() + bar.get_height()/2,
-                    f"{v:.2f}", va='center', fontsize=6, color='#333')
-        ax.set_xlim(0, xmax); ax.set_xlabel('Activation', fontsize=6)
-        ax.set_title(title, fontsize=7, fontweight='bold')
-        ax.spines['top'].set_visible(False); ax.spines['right'].set_visible(False)
-        ax.grid(axis='x', alpha=0.2, linestyle='--')
-
-    # Euclidean distances — shows how far each method moved from the original
+    # Euclidean distances — how far each noisy vector moved from original
     dist_iso  = float(np.linalg.norm(cv_iso  - cv_orig))
     dist_mani = float(np.linalg.norm(cv_mani - cv_orig))
 
     for mode in ['top', 'least']:
-        for noisy_cv, noisy_idxs, noisy_sims, noisy_label, c_noisy, dist in [
-            (cv_iso,  iso_idxs,  iso_sims,  'Iso',      C['iso_bar'],  dist_iso),
-            (cv_mani, mani_idxs, mani_sims, 'Manifold', C['mani_bar'], dist_mani),
+        # mode-aware colours so top and least look different
+        c_iso_mode  = C['iso_top']  if mode == 'top' else C['iso_least']
+        c_mani_mode = C['mani_top'] if mode == 'top' else C['mani_least']
+
+        for noisy_cv, noisy_idxs, noisy_label, c_noisy, dist, save_dir in [
+            (cv_iso,  iso_idxs,  'Iso',      c_iso_mode,  dist_iso,  iso_save_dir  or os.path.dirname(save_path)),
+            (cv_mani, mani_idxs, 'Manifold', c_mani_mode, dist_mani, mani_save_dir or os.path.dirname(save_path)),
         ]:
-            n_match_rows = int(np.ceil(top_n / 2))   # 6 → 3 rows
-            fig = plt.figure(figsize=(18, 3.5 + 3.2 * n_match_rows))
-
-            # Row 0: original image + original bars + noisy bars
-            gs0 = gridspec.GridSpec(1, 3, figure=fig,
-                                    left=0.02, right=0.98, top=0.92,
-                                    bottom=1 - (3.5 / (3.5 + 3.2 * n_match_rows)) * 0.85,
-                                    width_ratios=[1, 2.5, 2.5], wspace=0.35)
-            ax0 = fig.add_subplot(gs0[0])
-            img0 = _load(target_idx)
-            if img0: ax0.imshow(img0)
-            ax0.axis('off')
-            ax0.set_title(f"ORIGINAL\n{true_class[:22]}", fontsize=7, fontweight='bold')
-            _orig_bar(fig.add_subplot(gs0[1]), cv_orig,  "Original concept activations", C['overall'], mode)
-            _orig_bar(fig.add_subplot(gs0[2]), noisy_cv, f"{noisy_label} noisy activations", c_noisy,  mode)
-
-            # Rows 1+: 2 matches per row — image | paired bars | image | paired bars
-            top_frac = 3.5 / (3.5 + 3.2 * n_match_rows)
-            gs1 = gridspec.GridSpec(n_match_rows, 4, figure=fig,
-                                    left=0.02, right=0.98,
-                                    top=1 - top_frac * 1.05, bottom=0.04,
-                                    width_ratios=[0.5, 2.0, 0.5, 2.0],
-                                    hspace=0.6, wspace=0.35)
-            for mi, (ni, sim_val) in enumerate(zip(noisy_idxs, noisy_sims)):
-                r, col_img, col_bar = mi // 2, (mi % 2) * 2, (mi % 2) * 2 + 1
-                ax_img = fig.add_subplot(gs1[r, col_img])
-                img = _load(ni)
-                if img: ax_img.imshow(img)
-                ax_img.axis('off')
-                lbl = get_class_name(PROBE_DATASET, int(val_labels_t[ni].item()))
-                ax_img.set_title(f"Match #{mi+1}\n{lbl[:20]}", fontsize=6)  # no sim score
-                cv_ni = val_concept_vectors[ni].numpy()
-                ax_bar = fig.add_subplot(gs1[r, col_bar])
-                _paired_bars(ax_bar, cv_ni, noisy_cv, c_noisy, mode)
-                mode_lbl = 'Top' if mode == 'top' else 'Least'
-                ax_bar.set_title(f"Match #{mi+1}  {mode_lbl} {top_k_bars}  (green=true, colored=noisy)",
-                                 fontsize=6.5, fontweight='bold')
-
-            mode_lbl = 'Top' if mode == 'top' else 'Least'
-            fig.suptitle(
-                f"{noisy_label} smoothing — SAE retrieval  ({mode_lbl} {top_k_bars} concepts)\n"
-                f"idx={target_idx}  true: {true_class}  σ={sigma}  "
-                f"Euclidean dist from original = {dist:.2f}",
-                fontsize=10, fontweight='bold'
+            mode_lbl      = 'Top' if mode == 'top' else 'Least'
+            noisy_vec_lbl = f"{noisy_label} noisy vector"
+            suptitle = (
+                f"{noisy_label} smoothing  {mode_lbl} {top_k_bars} concepts\n"
+                f"idx={target_idx}  true: {true_class}  sigma={sigma}\n"
+                f"Euclidean dist from original = {dist:.2f}"
             )
-            # iso figures → iso_save_dir, mani figures → mani_save_dir (if provided)
-            if noisy_label == 'Iso' and iso_save_dir is not None:
-                out = os.path.join(iso_save_dir, f"idx{target_idx}_sae_retrieval_iso_{mode}.png")
-            elif noisy_label == 'Manifold' and mani_save_dir is not None:
-                out = os.path.join(mani_save_dir, f"idx{target_idx}_sae_retrieval_manifold_{mode}.png")
-            else:
-                out = save_path.replace('.png', f'_{noisy_label.lower()}_{mode}.png')
-            plt.savefig(out, dpi=150, bbox_inches='tight')
-            plt.close(fig)
+            base = f"idx{target_idx}_sae_retrieval_{noisy_label.lower()}_{mode}"
+
+            # ── Original figure: image (row 0) + 2 bar rows (same x-axis) ────
+            # Row 0: original image
+            # Row 1: ordered by original activation
+            # Row 2: ordered by noisy activation
+            # Both bar rows share the same xlim so they're directly comparable
+
+            # compute shared xlim across both bar panels
+            def _get_vals_for_xlim(cv_a, cv_b, m):
+                ref_a = np.array(cv_a)
+                ref_b = np.array(cv_b)
+                idxs_a = np.argsort(-ref_a)[:top_k_bars] if m == 'top' else \
+                         np.where(ref_a > 1e-6)[0][np.argsort(ref_a[np.where(ref_a > 1e-6)[0]])[:top_k_bars]] \
+                         if len(np.where(ref_a > 1e-6)[0]) else np.array([], dtype=int)
+                idxs_b = np.argsort(-ref_b)[:top_k_bars] if m == 'top' else \
+                         np.where(ref_b > 1e-6)[0][np.argsort(ref_b[np.where(ref_b > 1e-6)[0]])[:top_k_bars]] \
+                         if len(np.where(ref_b > 1e-6)[0]) else np.array([], dtype=int)
+                all_v = []
+                if len(idxs_a): all_v += list(ref_a[idxs_a]) + list(np.array(cv_b)[idxs_a])
+                if len(idxs_b): all_v += list(ref_b[idxs_b]) + list(np.array(cv_a)[idxs_b])
+                return float(max(all_v)) * 1.3 if all_v else 1.0
+
+            shared_xlim0 = _get_vals_for_xlim(cv_orig, noisy_cv, mode)
+
+            fig0 = plt.figure(figsize=(12, 10))
+            gs0  = plt.GridSpec(3, 2, figure=fig0,
+                                height_ratios=[1, 2, 2],
+                                hspace=0.5, wspace=0.4)
+
+            # image spanning both columns
+            ax_img0 = fig0.add_subplot(gs0[0, :])
+            img0 = _load(target_idx)
+            if img0:
+                ax_img0.imshow(img0, aspect='auto')
+            ax_img0.axis('off')
+            ax_img0.set_title(f"ORIGINAL  {true_class[:30]}", fontsize=9, fontweight='bold')
+
+            # row 1: ordered by original
+            ax_r1 = fig0.add_subplot(gs0[1, :])
+            _comparison_bars(ax_r1, cv_orig, noisy_cv,
+                             C['overall'], c_noisy,
+                             'Original vector', noisy_vec_lbl,
+                             order_by='a', mode=mode)
+            ax_r1.set_xlim(0, shared_xlim0)
+            ax_r1.set_title(f"Ordered by original activation  ({mode_lbl} {top_k_bars})", fontsize=8)
+            ax_r1.legend(fontsize=7, loc='lower right')
+
+            # row 2: ordered by noisy
+            ax_r2 = fig0.add_subplot(gs0[2, :])
+            _comparison_bars(ax_r2, noisy_cv, cv_orig,
+                             c_noisy, C['overall'],
+                             noisy_vec_lbl, 'Original vector',
+                             order_by='a', mode=mode)
+            ax_r2.set_xlim(0, shared_xlim0)
+            ax_r2.set_title(f"Ordered by noisy activation  ({mode_lbl} {top_k_bars})", fontsize=8)
+            ax_r2.legend(fontsize=7, loc='lower right')
+
+            fig0.suptitle(suptitle, fontsize=9, fontweight='bold')
+            fig0.savefig(os.path.join(save_dir, f"{base}_original.png"),
+                         dpi=150, bbox_inches='tight')
+            plt.close(fig0)
+
+            # ── One figure per match ──────────────────────────────────────────
+            for mi, ni in enumerate(noisy_idxs):
+                cv_ni  = val_concept_vectors[ni].numpy()
+                lbl_ni = get_class_name(PROBE_DATASET, int(val_labels_t[ni].item()))
+
+                fig_m, axes_m = plt.subplots(1, 2, figsize=(12, 4.5),
+                                             gridspec_kw={'width_ratios': [1, 3],
+                                                          'wspace': 0.35})
+                ax_img_m = axes_m[0]
+                img_m = _load(ni)
+                if img_m: ax_img_m.imshow(img_m)
+                ax_img_m.axis('off')
+                ax_img_m.set_title(f"Match #{mi+1}\n{lbl_ni[:22]}", fontsize=8, fontweight='bold')
+
+                _comparison_bars(axes_m[1], cv_ni, noisy_cv,
+                                 C['overall'], c_noisy,
+                                 'Matched true vector', noisy_vec_lbl,
+                                 order_by='a', mode=mode)
+                axes_m[1].set_title(f"Match #{mi+1}  {mode_lbl} {top_k_bars}", fontsize=8)
+
+                handles, labels_leg = axes_m[1].get_legend_handles_labels()
+                fig_m.legend(handles, labels_leg, loc='lower center', ncol=2,
+                             fontsize=8, frameon=True, bbox_to_anchor=(0.65, -0.04))
+
+                fig_m.suptitle(suptitle, fontsize=9, fontweight='bold')
+                fig_m.savefig(os.path.join(save_dir, f"{base}_match{mi+1}.png"),
+                              dpi=150, bbox_inches='tight')
+                plt.close(fig_m)
 
 
 # ===========================================================================
