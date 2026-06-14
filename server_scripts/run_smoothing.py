@@ -842,7 +842,8 @@ def top_n_in_sae(cv_np, n=5):
 
 def save_sae_retrieval_figure(target_idx, cv_orig, cv_iso, cv_mani,
                                sigma, val_labels_t, val_dataset,
-                               method_name, save_path, top_n=5, top_k_bars=10):
+                               method_name, save_path, top_n=5, top_k_bars=10,
+                               iso_save_dir=None, mani_save_dir=None):
     """
     retrieve directly in SAE concept space [8192].
     No decoder. No 512 projection.
@@ -876,7 +877,19 @@ def save_sae_retrieval_figure(target_idx, cv_orig, cv_iso, cv_mani,
             pass
         return None
 
-    def _concept_bars(ax, cv_np, title, color, mode='top'):
+    def _get_bar_vals(cv_np, mode):
+        """Return the activation values that will be plotted — used to compute shared xlim."""
+        cv = np.array(cv_np)
+        if mode == 'top':
+            idxs = np.argsort(-cv)[:top_k_bars]
+        else:
+            active = np.where(cv > 1e-6)[0]
+            if len(active) == 0:
+                return np.array([0.0])
+            idxs = active[np.argsort(cv[active])[:top_k_bars]]
+        return cv[idxs]
+
+    def _concept_bars(ax, cv_np, title, color, mode='top', xlim=None):
         cv = np.array(cv_np)
         if mode == 'top':
             idxs = np.argsort(-cv)[:top_k_bars]
@@ -888,18 +901,19 @@ def save_sae_retrieval_figure(target_idx, cv_orig, cv_iso, cv_mani,
             idxs = active[np.argsort(cv[active])[:top_k_bars]]
         vals  = cv[idxs]
         names = [(concept_names[i] if concept_names else f"c{i}")[:22] for i in idxs]
-        order = np.argsort(vals)[::-1]   # descending
+        order = np.argsort(vals)[::-1]
         y     = np.arange(len(idxs))
         bars  = ax.barh(y, vals[order], color=color, alpha=0.85)
         ax.set_yticks(y)
         ax.set_yticklabels([names[i] for i in order], fontsize=6)
         ax.invert_yaxis()
-        # activation number at bar end
+        # shared xlim — same scale across all panels in figure
+        xmax = xlim if xlim is not None else (vals.max() or 1) * 1.25
         for bar, val in zip(bars, vals[order]):
-            ax.text(bar.get_width() + 0.02 * (vals.max() or 1),
+            ax.text(xmax * 0.02 + bar.get_width(),
                     bar.get_y() + bar.get_height() / 2,
                     f"{val:.2f}", va='center', ha='left', fontsize=6, color='#333')
-        ax.set_xlim(0, (vals.max() or 1) * 1.25)
+        ax.set_xlim(0, xmax)
         ax.set_xlabel('Activation', fontsize=6)
         ax.set_title(title, fontsize=7, fontweight='bold')
         ax.spines['top'].set_visible(False)
@@ -917,7 +931,13 @@ def save_sae_retrieval_figure(target_idx, cv_orig, cv_iso, cv_mani,
             (cv_iso,  iso_idxs,  iso_sims,  'Iso',      C['iso_bar']),
             (cv_mani, mani_idxs, mani_sims, 'Manifold', C['mani_bar']),
         ]:
-            n_rows = top_n + 1   # +1 for original reference row
+            # compute shared x-axis across all bar panels in this figure
+            all_vals = list(_get_bar_vals(cv_orig, mode)) + list(_get_bar_vals(noisy_cv, mode))
+            for ni in noisy_idxs:
+                all_vals += list(_get_bar_vals(val_concept_vectors[ni].numpy(), mode))
+            shared_xlim = float(max(all_vals)) * 1.25 if all_vals else 1.0
+
+            n_rows = top_n + 1
             fig = plt.figure(figsize=(15, 3.0 * n_rows))
             gs  = gridspec.GridSpec(n_rows, 3, figure=fig,
                                     width_ratios=[1, 2.5, 2.5],
@@ -930,9 +950,11 @@ def save_sae_retrieval_figure(target_idx, cv_orig, cv_iso, cv_mani,
             ax0.axis('off')
             ax0.set_title(f"ORIGINAL\n{true_class[:22]}", fontsize=7, fontweight='bold')
             _concept_bars(fig.add_subplot(gs[0, 1]),
-                          cv_orig,   "Original concept activations", C['overall'],  mode=mode)
+                          cv_orig,  "Original concept activations", C['overall'], mode=mode,
+                          xlim=shared_xlim)
             _concept_bars(fig.add_subplot(gs[0, 2]),
-                          noisy_cv,  f"{noisy_label} query activations", c_noisy,   mode=mode)
+                          noisy_cv, f"{noisy_label} noisy activations", c_noisy, mode=mode,
+                          xlim=shared_xlim)
 
             # Rows 1-top_n: top-n SAE matches of the noisy query
             for row, (ni, sim_val) in enumerate(zip(noisy_idxs, noisy_sims), start=1):
@@ -945,9 +967,11 @@ def save_sae_retrieval_figure(target_idx, cv_orig, cv_iso, cv_mani,
 
                 cv_ni = val_concept_vectors[ni].numpy()
                 _concept_bars(fig.add_subplot(gs[row, 1]),
-                              cv_ni,    "Matched image concepts (true)", C['match'],  mode=mode)
+                              cv_ni,    "Matched image concepts (true)", C['match'], mode=mode,
+                              xlim=shared_xlim)
                 _concept_bars(fig.add_subplot(gs[row, 2]),
-                              noisy_cv, f"{noisy_label} query activations", c_noisy,  mode=mode)
+                              noisy_cv, f"{noisy_label} noisy activations", c_noisy, mode=mode,
+                              xlim=shared_xlim)
 
             mode_lbl = 'Top' if mode == 'top' else 'Least'
             fig.suptitle(
@@ -955,7 +979,13 @@ def save_sae_retrieval_figure(target_idx, cv_orig, cv_iso, cv_mani,
                 f"idx={target_idx}  true: {true_class}  σ={sigma}",
                 fontsize=10, fontweight='bold', y=1.01
             )
-            out = save_path.replace('.png', f'_{noisy_label.lower()}_{mode}.png')
+            # iso figures → iso_save_dir, mani figures → mani_save_dir (if provided)
+            if noisy_label == 'Iso' and iso_save_dir is not None:
+                out = os.path.join(iso_save_dir, f"idx{target_idx}_sae_retrieval_iso_{mode}.png")
+            elif noisy_label == 'Manifold' and mani_save_dir is not None:
+                out = os.path.join(mani_save_dir, f"idx{target_idx}_sae_retrieval_manifold_{mode}.png")
+            else:
+                out = save_path.replace('.png', f'_{noisy_label.lower()}_{mode}.png')
             plt.savefig(out, dpi=150, bbox_inches='tight')
             plt.close(fig)
 
@@ -1181,12 +1211,24 @@ if VIZ_ONLY:
                 ax.set_xlabel(f'PC1 (cloud std={pc1_std:.2f})')
                 ax.set_ylabel(f'PC2 (cloud std={pc2_std:.2f})')
                 ax.grid(alpha=0.3)
-                ax.legend(fontsize=7, loc='upper right')
+                ax.legend_.remove() if ax.legend_ else None
+            # legend at bottom — shared across all panels
+            legend_handles_i = [
+                plt.Line2D([0],[0], color=C['lat_iso'], marker='o', lw=0, markersize=5,
+                           label=f'Iso MC samples (n={N_SMOOTH_SAMPLES})'),
+                plt.Line2D([0],[0], color=C['iso_circle'], lw=2.0, linestyle=(0,(4,2)),
+                           label=f'σ-circle r=σ'),
+                plt.Line2D([0],[0], marker='*', color='w', markerfacecolor=C['anchor'],
+                           markeredgecolor='#444', markersize=10, label='Anchor'),
+            ]
+            fig_i.legend(handles=legend_handles_i, loc='lower center', ncol=3, fontsize=8,
+                         frameon=True, framealpha=0.95, edgecolor='#cccccc',
+                         bbox_to_anchor=(0.5, -0.03))
             fig_i.suptitle(
                 f"Isotropic Smoothing Geometry   σ={SCALE_WEIGHT}   MC={N_SMOOTH_SAMPLES}",
                 fontsize=11, fontweight='bold', y=1.03,
             )
-            plt.tight_layout()
+            plt.tight_layout(rect=[0, 0.06, 1, 1])
             plt.savefig(save_path, dpi=180, bbox_inches='tight')
             plt.close(fig_i)
 
@@ -1260,7 +1302,7 @@ if VIZ_ONLY:
                 ax.set_xlabel(f'PC1 (cloud std={pc1_std:.2f})')
                 ax.set_ylabel(f'PC2 (cloud std={pc2_std:.2f})')
                 ax.grid(alpha=0.3)
-                ax.legend(fontsize=7, loc='upper right')
+                # no per-panel legend — shared legend at bottom of figure
             legend_handles_m = [
                 plt.Line2D([0], [0], color=C['iso_circle'], lw=1.8, linestyle=(0, (4, 2)), label='Iso circle r=σ'),
                 plt.Line2D([0], [0], color=C['mani_ellipse'], lw=1.8, linestyle='solid', label='Manifold ellipse'),
@@ -1388,13 +1430,18 @@ if VIZ_ONLY:
         plt.close(fig_bg)
 
         # ── SAE-space retrieval figure ────────
-        cv_noisy_m = (cv_whitened + np.random.normal(0, alpha, size=len(ev))) @ (np.sqrt(ev)[:, None] * Vt) + mean_nn
-        cv_noisy_g = cv_orig + np.random.normal(0, gauss_sigma, size=cv_orig.shape)
-        save_sae_retrieval_figure(
-            target_idx, cv_orig, cv_noisy_g, cv_noisy_m,
-            round(SCALE_WEIGHT, 3), val_labels, probe_val_dataset,
-            'Manifold vs Isotropic',
-            os.path.join(manifold_dir, f"idx{target_idx}_sae_retrieval.png"))
+        if probe_val_dataset is not None:
+            cv_noisy_m = (cv_whitened + np.random.normal(0, alpha, size=len(ev))) @ (np.sqrt(ev)[:, None] * Vt) + mean_nn
+            cv_noisy_g = cv_orig + np.random.normal(0, gauss_sigma, size=cv_orig.shape)
+            save_sae_retrieval_figure(
+                target_idx, cv_orig, cv_noisy_g, cv_noisy_m,
+                round(SCALE_WEIGHT, 3), val_labels, probe_val_dataset,
+                'Manifold vs Isotropic',
+                os.path.join(manifold_dir, f"idx{target_idx}_sae_retrieval.png"),
+                iso_save_dir=isotropic_dir, mani_save_dir=manifold_dir)
+            print(f"  Saved SAE retrieval figures for idx {target_idx} (VIZ_ONLY)", flush=True)
+        else:
+            print(f"  WARNING: probe_val_dataset is None — SAE retrieval figure skipped (VIZ_ONLY)", flush=True)
 
         print(f"  Saved viz for idx {target_idx} (VIZ_ONLY)", flush=True)
         viz_count += 1
@@ -1905,7 +1952,7 @@ for loop_i, target_idx in enumerate(TARGET_IDCS if not VIZ_ONLY else []):
                 ax.set_xlabel(f'PC1 (cloud std={pc1_std:.2f})')
                 ax.set_ylabel(f'PC2 (cloud std={pc2_std:.2f})')
                 ax.grid(alpha=0.3)
-                ax.legend(fontsize=7, loc='upper right')
+                # no per-panel legend — shared legend at bottom of figure
             legend_handles_m = [
                 plt.Line2D([0], [0], color=C['iso_circle'], lw=1.8, linestyle=(0, (4, 2)), label='Iso circle r=σ'),
                 plt.Line2D([0], [0], color=C['mani_ellipse'], lw=1.8, linestyle='solid', label='Manifold ellipse'),
@@ -1985,15 +2032,22 @@ for loop_i, target_idx in enumerate(TARGET_IDCS if not VIZ_ONLY else []):
         plt.close(fig_m)
 
         # SAE-space retrieval figure (no decoder, direct [8192] cosine search)
-        cv_noisy_m_ex = cv_whitened + np.random.normal(0, alpha, size=len(ev))
-        cv_noisy_m_ex = cv_noisy_m_ex @ (np.sqrt(ev)[:, None] * Vt) + mean_nn
-        cv_noisy_g_ex = cv_orig + np.random.normal(0, gauss_sigma, size=cv_orig.shape)
-        save_sae_retrieval_figure(
-            target_idx, cv_orig, cv_noisy_g_ex, cv_noisy_m_ex,
-            round(SCALE_WEIGHT, 3), val_labels, probe_val_dataset,
-            'Manifold vs Isotropic',
-            os.path.join(manifold_dir, f"idx{target_idx}_sae_retrieval.png")
-        )
+        if probe_val_dataset is not None:
+            cv_noisy_m_ex = cv_whitened + np.random.normal(0, alpha, size=len(ev))
+            cv_noisy_m_ex = cv_noisy_m_ex @ (np.sqrt(ev)[:, None] * Vt) + mean_nn
+            cv_noisy_g_ex = cv_orig + np.random.normal(0, gauss_sigma, size=cv_orig.shape)
+            # iso figures → isotropic_dir, mani figures → manifold_dir
+            # function appends _{iso/manifold}_{top/least}.png to the base path
+            save_sae_retrieval_figure(
+                target_idx, cv_orig, cv_noisy_g_ex, cv_noisy_m_ex,
+                round(SCALE_WEIGHT, 3), val_labels, probe_val_dataset,
+                'Manifold vs Isotropic',
+                os.path.join(isotropic_dir, f"idx{target_idx}_sae_retrieval.png"),
+                iso_save_dir=isotropic_dir, mani_save_dir=manifold_dir,
+            )
+            print(f"  Saved SAE retrieval figures for idx {target_idx}", flush=True)
+        else:
+            print(f"  WARNING: probe_val_dataset is None — SAE retrieval figure skipped for idx {target_idx}", flush=True)
 
         # Manifold JSON
         manifold_result = {
@@ -2148,115 +2202,8 @@ for loop_i, target_idx in enumerate(TARGET_IDCS if not VIZ_ONLY else []):
         # ---------------------------------------------------------------
         # Concept Vote Histogram — Manifold
         # Shows how often each concept appears in top-K across N samples
-        # Original top-20 concepts highlighted in blue, new concepts in orange
-        # ---------------------------------------------------------------
-        def _plot_concept_vote_histogram(concept_votes, orig_top_set, concept_names_list,
-                                         n_samples, method_name, color_orig, color_new,
-                                         save_path, target_idx, n_show=50):
-            """Bar chart: x=concepts (union of top across N samples), y=votes (how many samples)."""
-            # Get top concepts by vote count, limit to n_show
-            top_concepts = concept_votes.most_common(n_show)
-            if not top_concepts:
-                return
-
-            c_idxs = [c[0] for c in top_concepts]
-            c_votes = [c[1] for c in top_concepts]
-            c_names = [(concept_names_list[i] if concept_names_list else f"c_{i}")[:25]
-                       for i in c_idxs]
-            c_colors = [color_orig if i in orig_top_set else color_new for i in c_idxs]
-
-            fig, ax = plt.subplots(figsize=(max(14, len(c_names) * 0.35), 6))
-            bars = ax.bar(range(len(c_names)), c_votes, color=c_colors, alpha=0.85, edgecolor='white', linewidth=0.5)
-            ax.set_xticks(range(len(c_names)))
-            ax.set_xticklabels(c_names, rotation=60, ha='right', fontsize=7)
-            ax.set_ylabel(f'Votes (out of {n_samples})')
-            ax.set_xlabel('Concept')
-            ax.axhline(y=n_samples * 0.5, color='red', ls='--', alpha=0.5, label='50% threshold')
-
-            # Legend
-            from matplotlib.patches import Patch
-            legend_elements = [
-                Patch(facecolor=color_orig, label=f'Original top-{orig_top_k} (survived)'),
-                Patch(facecolor=color_new, label='New concepts (appeared after smoothing)'),
-            ]
-            ax.legend(handles=legend_elements, fontsize=9, loc='upper right')
-
-            ax.set_title(f'{method_name} — Concept Votes across {n_samples} smooth samples\n'
-                         f'idx={target_idx}, true={get_class_name(PROBE_DATASET, label_true)}',
-                         fontsize=12, fontweight='bold')
-            ax.set_ylim(0, n_samples * 1.08)
-            ax.grid(True, axis='y', alpha=0.3)
-            plt.tight_layout()
-            plt.savefig(save_path, dpi=150, bbox_inches='tight')
-            plt.close(fig)
-
-        _plot_concept_vote_histogram(
-            all_concept_votes_manifold, orig_top, concept_names,
-            N_SMOOTH_SAMPLES, 'Manifold Smoothing', '#2196F3', '#FF9800',
-            os.path.join(manifold_dir, f"idx{target_idx}_concept_votes.png"),
-            target_idx)
-
-        _plot_concept_vote_histogram(
-            all_concept_votes_gaussian, orig_top, concept_names,
-            N_SMOOTH_SAMPLES, 'Isotropic Gaussian', '#2196F3', '#FF9800',
-            os.path.join(isotropic_dir, f"idx{target_idx}_concept_votes.png"),
-            target_idx)
-
-        # ---------------------------------------------------------------
-        # Least Activated Concepts — standalone bar chart (like top activations)
-        # Shows originally-active concepts with lowest activation values,
-        # with concept index shown, comparing original vs smoothed.
-        # ---------------------------------------------------------------
-        def _plot_least_activated(cv_orig, cv_smoothed_avg, concept_names_list,
-                                  method_name, color_smooth, save_path, target_idx,
-                                  n_show=20):
-            """Bar chart of least-activated originally-active concepts, with concept index."""
-            # Find all originally active concepts (activation > 1e-6)
-            active_mask = cv_orig > 1e-6
-            if active_mask.sum() == 0:
-                return
-            active_idxs = np.where(active_mask)[0]
-            # Sort by original activation (ascending = least first)
-            sorted_by_act = sorted(active_idxs, key=lambda i: cv_orig[i])[:n_show]
-
-            c_labels = []
-            for i in sorted_by_act:
-                cname = (concept_names_list[i] if concept_names_list else f"c_{i}")[:22]
-                c_labels.append(f"[{i}] {cname}")
-
-            orig_vals = [float(cv_orig[i]) for i in sorted_by_act]
-            smooth_vals = [float(cv_smoothed_avg[i]) for i in sorted_by_act]
-
-            fig, ax = plt.subplots(figsize=(12, max(6, len(c_labels) * 0.4)))
-            y_pos = np.arange(len(c_labels))
-            ax.barh(y_pos - 0.2, orig_vals, height=0.35, color=C['overall'],
-                    label='Original', alpha=0.8)
-            ax.barh(y_pos + 0.2, smooth_vals, height=0.35, color=color_smooth,
-                    label=f'{method_name} avg', alpha=0.8)
-            ax.set_yticks(y_pos)
-            ax.set_yticklabels(c_labels, fontsize=8)
-            ax.invert_yaxis()
-            ax.set_xlabel('Activation')
-            ax.set_title(f'{method_name}: Least Activated Concepts (sorted by original activation)\n'
-                         f'idx={target_idx}, true={get_class_name(PROBE_DATASET, label_true)}',
-                         fontsize=12, fontweight='bold')
-            ax.legend(fontsize=9)
-            ax.grid(True, axis='x', alpha=0.3)
-            plt.tight_layout()
-            plt.savefig(save_path, dpi=150, bbox_inches='tight')
-            plt.close(fig)
-
-        _plot_least_activated(
-            cv_orig, cv_smoothed_avg, concept_names,
-            'Manifold', 'coral',
-            os.path.join(manifold_dir, f"idx{target_idx}_least_activated.png"),
-            target_idx)
-
-        _plot_least_activated(
-            cv_orig, cv_gauss_avg, concept_names,
-            'Gaussian', '#FF9800',
-            os.path.join(isotropic_dir, f"idx{target_idx}_least_activated.png"),
-            target_idx)
+        # [REMOVED] _plot_concept_vote_histogram — not needed
+        # [REMOVED] _plot_least_activated — covered by top_least_activation figure
 
         # ---------------------------------------------------------------
         # Concept Activation Distribution — boxplots showing spread across N samples
