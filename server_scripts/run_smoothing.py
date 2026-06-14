@@ -921,20 +921,62 @@ def save_sae_retrieval_figure(target_idx, cv_orig, cv_iso, cv_mani,
     label_id   = int(val_labels_t[target_idx].item())
     true_class = get_class_name(PROBE_DATASET, label_id)
 
+    def _single_bars(ax, cv, color, title, mode='top'):
+        """
+        Clean single-color bar chart — paper style like reference figure.
+        One bar per concept. Number at bar end. No overlap. Auto x-axis.
+        """
+        cv = np.array(cv)
+        if mode == 'top':
+            idxs = np.argsort(-cv)[:top_k_bars]
+        else:
+            active = np.where(cv > 1e-6)[0]
+            if len(active) == 0:
+                ax.text(0.5, 0.5, 'no active concepts', ha='center', va='center',
+                        transform=ax.transAxes, fontsize=8)
+                ax.set_title(title, fontsize=8, fontweight='bold')
+                ax.axis('off')
+                return
+            idxs = active[np.argsort(cv[active])[:top_k_bars]]
+
+        vals  = cv[idxs]
+        names = [(concept_names[i] if concept_names else f"c{i}")[:18] for i in idxs]
+        order = np.argsort(vals)[::-1]   # descending — highest at top
+
+        y = np.arange(len(idxs))
+        bars = ax.barh(y, vals[order], height=0.6, color=color, alpha=0.85)
+        ax.set_yticks(y)
+        ax.set_yticklabels([names[i] for i in order], fontsize=7)
+        ax.invert_yaxis()
+
+        # x-axis: tight to actual data, not over-extended
+        vmax = float(vals.max()) if len(vals) > 0 else 0.01
+        xmax = vmax * 1.25 if vmax > 0 else 1.0
+        ax.set_xlim(0, xmax)
+
+        # number at end of bar, always visible, no overlap with axis edge
+        for bar, val in zip(bars, vals[order]):
+            txt = f"{val:.2f}" if val >= 0.01 else f"{val:.4f}"
+            ax.text(min(bar.get_width() + vmax * 0.02, xmax * 0.99),
+                    bar.get_y() + bar.get_height() / 2,
+                    txt, va='center', ha='left', fontsize=6.5,
+                    color='#111', clip_on=True)
+
+        ax.set_xlabel('Activation', fontsize=7)
+        ax.set_title(title, fontsize=8, fontweight='bold', pad=4)
+        ax.tick_params(labelsize=7)
+        ax.spines['top'].set_visible(False)
+        ax.spines['right'].set_visible(False)
+        ax.grid(axis='x', alpha=0.2, linestyle='--')
+
     def _comparison_bars(ax, cv_a, cv_b, color_a, color_b,
                          label_a, label_b, order_by='a', mode='top', xlim=None):
-        """
-        Paper-style horizontal bar chart.
-        - Concept name + activation value shown as text inside/beside each bar
-        - Both vectors shown side by side for each concept
-        - Zero activations kept (shown as tiny bar) — matches reference paper style
-        """
+        """Two-bar comparison — used only for original vs noisy panels."""
         cv_a, cv_b = np.array(cv_a), np.array(cv_b)
         ref = cv_a if order_by == 'a' else cv_b
         if mode == 'top':
             idxs = np.argsort(-ref)[:top_k_bars]
         else:
-            # least: pick lowest activations among those with any activation in EITHER vector
             both_active = np.where((cv_a > 1e-6) | (cv_b > 1e-6))[0]
             if len(both_active) == 0:
                 ax.text(0.5, 0.5, 'no active concepts', ha='center', va='center',
@@ -942,37 +984,29 @@ def save_sae_retrieval_figure(target_idx, cv_orig, cv_iso, cv_mani,
                 ax.axis('off')
                 return
             idxs = both_active[np.argsort(ref[both_active])[:top_k_bars]]
-
         vals_a = cv_a[idxs]
         vals_b = cv_b[idxs]
-        names  = [(concept_names[i] if concept_names else f"c{i}")[:20] for i in idxs]
-        order  = np.argsort(ref[idxs])[::-1]   # descending
+        names  = [(concept_names[i] if concept_names else f"c{i}")[:18] for i in idxs]
+        order  = np.argsort(ref[idxs])[::-1]
         y, h   = np.arange(len(idxs)), 0.35
-
-        ax.barh(y - h/2, vals_a[order], height=h, color=color_a, alpha=0.88, label=label_a)
-        ax.barh(y + h/2, vals_b[order], height=h, color=color_b, alpha=0.88, label=label_b)
+        ax.barh(y - h/2, vals_a[order], height=h, color=color_a, alpha=0.85, label=label_a)
+        ax.barh(y + h/2, vals_b[order], height=h, color=color_b, alpha=0.85, label=label_b)
         ax.set_yticks(y)
         ax.set_yticklabels([names[i] for i in order], fontsize=7)
         ax.invert_yaxis()
-
         vmax = max(float(vals_a.max()), float(vals_b.max()), 0.001)
-        xmax = xlim if xlim else vmax * 1.35
-
-        # activation value at end of each bar — always shown, format adapts
+        xmax = xlim if xlim else vmax * 1.25
         for yi, (va, vb) in enumerate(zip(vals_a[order], vals_b[order])):
             for val, yoff in [(va, -h/2), (vb, h/2)]:
                 txt = f"{val:.2f}" if val >= 0.01 else f"{val:.4f}"
-                # place just after bar end, clipped to axes
-                ax.text(min(val + vmax * 0.015, xmax * 0.98), yi + yoff,
-                        txt, va='center', ha='left',
-                        fontsize=6, color='#222', clip_on=True)
-
+                ax.text(min(val + vmax * 0.02, xmax * 0.99), yi + yoff,
+                        txt, va='center', ha='left', fontsize=6, color='#111', clip_on=True)
         ax.set_xlim(0, xmax)
         ax.set_xlabel('Activation', fontsize=7)
         ax.tick_params(labelsize=7)
         ax.spines['top'].set_visible(False)
         ax.spines['right'].set_visible(False)
-        ax.grid(axis='x', alpha=0.15, linestyle='--')
+        ax.grid(axis='x', alpha=0.2, linestyle='--')
 
     # Euclidean distances — how far each noisy vector moved from original
     dist_iso  = float(np.linalg.norm(cv_iso  - cv_orig))
@@ -1023,60 +1057,54 @@ def save_sae_retrieval_figure(target_idx, cv_orig, cv_iso, cv_mani,
                                         gridspec_kw={'height_ratios': [0.8, 2, 2],
                                                      'hspace': 0.6})
 
-            # row 0: original image — natural aspect ratio, centred
+            # ── Original figure: image top, two single-bar panels below ──────
+            # Row 0: original image (small, natural ratio)
+            # Row 1: single bars — original cv ordered by original
+            # Row 2: single bars — noisy cv ordered by noisy
+            fig0, axes0 = plt.subplots(3, 1, figsize=(5, 7),
+                                        gridspec_kw={'height_ratios': [0.7, 2, 2],
+                                                     'hspace': 0.55})
             ax_img0 = axes0[0]
             img0 = _load(target_idx)
             if img0:
-                ax_img0.imshow(img0)          # no aspect='auto' → natural ratio
+                ax_img0.imshow(img0)
             ax_img0.axis('off')
-            ax_img0.set_title(f"ORIGINAL  {true_class[:35]}", fontsize=9, fontweight='bold')
+            ax_img0.set_title(f"ORIGINAL  {true_class[:30]}", fontsize=8, fontweight='bold')
 
-            # row 1: ordered by original (both rows share xlim)
-            _comparison_bars(axes0[1], cv_orig, noisy_cv,
-                             C['overall'], c_noisy,
-                             'Original vector', noisy_vec_lbl,
-                             order_by='a', mode=mode, xlim=shared_xlim0)
-            axes0[1].set_title(f"Ordered by original activation  ({mode_lbl} {top_k_bars})", fontsize=8)
-            axes0[1].legend(fontsize=7, loc='lower right')
+            _single_bars(axes0[1], cv_orig, C['overall'],
+                         f"Original concept activations  ({mode_lbl} {top_k_bars})", mode)
+            _single_bars(axes0[2], noisy_cv, c_noisy,
+                         f"{noisy_label} noisy activations  ({mode_lbl} {top_k_bars})", mode)
 
-            # row 2: ordered by noisy
-            _comparison_bars(axes0[2], noisy_cv, cv_orig,
-                             c_noisy, C['overall'],
-                             noisy_vec_lbl, 'Original vector',
-                             order_by='a', mode=mode, xlim=shared_xlim0)
-            axes0[2].set_title(f"Ordered by noisy activation  ({mode_lbl} {top_k_bars})", fontsize=8)
-            axes0[2].legend(fontsize=7, loc='lower right')
-
-            fig0.suptitle(suptitle, fontsize=9, fontweight='bold')
+            fig0.suptitle(suptitle, fontsize=8, fontweight='bold')
             fig0.savefig(os.path.join(save_dir, f"{base}_original.png"),
                          dpi=150, bbox_inches='tight')
             plt.close(fig0)
 
-            # ── One figure per match ──────────────────────────────────────────
+            # ── One figure per match — image left, two single-bar panels right ─
             for mi, ni in enumerate(noisy_idxs):
                 cv_ni  = val_concept_vectors[ni].numpy()
                 lbl_ni = get_class_name(PROBE_DATASET, int(val_labels_t[ni].item()))
 
-                fig_m, axes_m = plt.subplots(1, 2, figsize=(8, 3.5),
-                                             gridspec_kw={'width_ratios': [1, 2.5],
-                                                          'wspace': 0.25})
-                ax_img_m = axes_m[0]
+                fig_m = plt.figure(figsize=(9, 3.8))
+                gs_m  = plt.GridSpec(1, 3, figure=fig_m,
+                                     width_ratios=[1, 2, 2],
+                                     wspace=0.35)
+
+                ax_img_m = fig_m.add_subplot(gs_m[0])
                 img_m = _load(ni)
                 if img_m: ax_img_m.imshow(img_m)
                 ax_img_m.axis('off')
-                ax_img_m.set_title(f"Match #{mi+1}\n{lbl_ni[:22]}", fontsize=8, fontweight='bold')
+                ax_img_m.set_title(f"Match #{mi+1}\n{lbl_ni[:20]}", fontsize=8, fontweight='bold')
 
-                _comparison_bars(axes_m[1], cv_ni, noisy_cv,
-                                 C['overall'], c_noisy,
-                                 'Matched true vector', noisy_vec_lbl,
-                                 order_by='a', mode=mode)
-                axes_m[1].set_title(f"Match #{mi+1}  {mode_lbl} {top_k_bars}", fontsize=8)
+                # matched image TRUE bars
+                _single_bars(fig_m.add_subplot(gs_m[1]), cv_ni, C['overall'],
+                             f"Matched #{mi+1} true concepts  ({mode_lbl})", mode)
+                # noisy query bars
+                _single_bars(fig_m.add_subplot(gs_m[2]), noisy_cv, c_noisy,
+                             f"{noisy_label} noisy activations  ({mode_lbl})", mode)
 
-                handles, labels_leg = axes_m[1].get_legend_handles_labels()
-                fig_m.legend(handles, labels_leg, loc='lower center', ncol=2,
-                             fontsize=8, frameon=True, bbox_to_anchor=(0.65, -0.04))
-
-                fig_m.suptitle(suptitle, fontsize=9, fontweight='bold')
+                fig_m.suptitle(suptitle, fontsize=8, fontweight='bold')
                 fig_m.savefig(os.path.join(save_dir, f"{base}_match{mi+1}.png"),
                               dpi=150, bbox_inches='tight')
                 plt.close(fig_m)
