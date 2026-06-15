@@ -921,34 +921,32 @@ def save_sae_retrieval_figure(target_idx, cv_orig, cv_iso, cv_mani,
     label_id   = int(val_labels_t[target_idx].item())
     true_class = get_class_name(PROBE_DATASET, label_id)
 
-    def _effect_bars(ax, cv_orig_v, cv_noisy_v, c_noisy, title, mode='top'):
+    def _effect_bars(ax, cv_orig_v, cv_noisy_v, c_noisy, title, mode='top',
+                     order_by='orig'):
         """
-        Shows the effect of smoothing on original concepts.
+        Shows the effect of smoothing noise on concepts.
 
-        Ordering: always by ORIGINAL vector (top-k or least-k active).
-        Green bar  = original activation for each concept
-        Colored bar = noisy activation for the SAME concept
-
-        This makes it immediately clear what the noise did to each concept.
-        Top mode:   original's highest-k concepts, sorted descending
-        Least mode: original's lowest-k ACTIVE concepts, sorted ascending
+        order_by='orig'  — select AND sort by original vector (default)
+        order_by='noisy' — select AND sort by noisy vector
+        Both bars (green=orig, colored=noisy) show the SAME concept indices.
         """
         orig  = np.array(cv_orig_v)
         noisy = np.array(cv_noisy_v)
+        ref   = orig if order_by == 'orig' else noisy
 
         if mode == 'top':
-            idxs  = np.argsort(-orig)[:top_k_bars]
-            order = np.argsort(orig[idxs])[::-1]   # descending
+            idxs  = np.argsort(-ref)[:top_k_bars]
+            order = np.argsort(ref[idxs])[::-1]
         else:
-            active = np.where(orig > 1e-6)[0]
+            active = np.where(ref > 1e-6)[0]
             if len(active) == 0:
                 ax.text(0.5, 0.5, 'no active concepts', ha='center', va='center',
                         transform=ax.transAxes, fontsize=8)
                 ax.set_title(title, fontsize=6.5, pad=2)
                 ax.axis('off')
                 return
-            idxs  = active[np.argsort(orig[active])[:top_k_bars]]
-            order = np.argsort(orig[idxs])          # ascending (least first at bottom)
+            idxs  = active[np.argsort(ref[active])[:top_k_bars]]
+            order = np.argsort(ref[idxs])
 
         orig_vals  = orig[idxs][order]
         noisy_vals = noisy[idxs][order]
@@ -1099,32 +1097,35 @@ def save_sae_retrieval_figure(target_idx, cv_orig, cv_iso, cv_mani,
                          dpi=150, bbox_inches='tight')
             plt.close(fig0)
 
-            # ── One figure per match — image left, two single-bar panels right ─
+            # ── Match figures — two sets: ordered by original, ordered by noisy ─
             for mi, ni in enumerate(noisy_idxs):
                 cv_ni  = val_concept_vectors[ni].numpy()
                 lbl_ni = get_class_name(PROBE_DATASET, int(val_labels_t[ni].item()))
 
-                fig_m = plt.figure(figsize=(8, 5.0))
-                gs_m  = plt.GridSpec(1, 2, figure=fig_m,
-                                     width_ratios=[1, 2.5],
-                                     wspace=0.3,
-                                     top=0.72, bottom=0.04)
+                for ob, ob_label in [('orig', 'orig_order'), ('noisy', 'noisy_order')]:
+                    fig_m = plt.figure(figsize=(8, 5.0))
+                    gs_m  = plt.GridSpec(1, 2, figure=fig_m,
+                                         width_ratios=[1, 2.5],
+                                         wspace=0.3,
+                                         top=0.72, bottom=0.04)
+                    ax_img_m = fig_m.add_subplot(gs_m[0])
+                    img_m = _load(ni)
+                    if img_m: ax_img_m.imshow(img_m)
+                    ax_img_m.axis('off')
+                    ax_img_m.set_title(f"Match #{mi+1}\n{lbl_ni[:22]}", fontsize=7)
 
-                ax_img_m = fig_m.add_subplot(gs_m[0])
-                img_m = _load(ni)
-                if img_m: ax_img_m.imshow(img_m)
-                ax_img_m.axis('off')
-                ax_img_m.set_title(f"Match #{mi+1}\n{lbl_ni[:22]}", fontsize=7)
+                    bar_title = (
+                        f"Matched #{mi+1}: effect of {noisy_label} noise  ({mode_lbl})\n"
+                        f"ordered by {'original' if ob=='orig' else 'noisy'} vector"
+                    )
+                    _effect_bars(fig_m.add_subplot(gs_m[1]), cv_ni, noisy_cv, c_noisy,
+                                 bar_title, mode, order_by=ob)
 
-                # green=matched image's concept, colored=noisy query's same concept
-                _effect_bars(fig_m.add_subplot(gs_m[1]), cv_ni, noisy_cv, c_noisy,
-                             f"Matched #{mi+1}: effect of {noisy_label} noise  ({mode_lbl})",
-                             mode)
-
-                fig_m.suptitle(suptitle, fontsize=7, fontweight='normal', y=0.99)
-                fig_m.savefig(os.path.join(save_dir, f"{base}_match{mi+1}.png"),
-                              dpi=150, bbox_inches='tight')
-                plt.close(fig_m)
+                    fig_m.suptitle(suptitle, fontsize=7, fontweight='normal', y=0.99)
+                    fname = f"{base}_match{mi+1}_{ob_label}.png"
+                    fig_m.savefig(os.path.join(save_dir, fname),
+                                  dpi=150, bbox_inches='tight')
+                    plt.close(fig_m)
 
 
 def save_match_grid_figure(target_idx, cv_orig, cv_iso, cv_mani,
