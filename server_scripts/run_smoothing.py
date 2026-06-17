@@ -968,22 +968,28 @@ def save_sae_retrieval_figure(target_idx, cv_orig, cv_iso, cv_mani,
         ax.set_xlim(0, xmax)
 
         for yi, (name, ov, nv) in enumerate(zip(names, orig_vals, noisy_vals)):
-            # concept name: white inside bar, dark if bar is zero/invisible
+            # concept name in green bar row — white inside bar, dark if invisible
             name_color = 'white' if ov > vmax * 0.05 else '#333'
             ax.text(vmax * 0.015, yi - h/2,
                     name, va='center', ha='left', fontsize=6.5,
                     color=name_color, clip_on=True)
-            # original number: at end of green bar, above it
-            if ov > 1e-6:   # hide zero original values
-                txt_o = f"{ov:.2f}" if ov >= 0.01 else f"{ov:.2e}"
-                ax.text(ov + vmax * 0.02, yi - h/2,
-                        txt_o, va='center', ha='left', fontsize=6,
-                        color='#222', clip_on=True)
-            if nv > 1e-6:   # hide zero noisy values
-                txt_n = f"{nv:.2f}" if nv >= 0.01 else f"{nv:.2e}"
-                ax.text(nv + vmax * 0.02, yi + h/2,
-                        txt_n, va='center', ha='left', fontsize=6,
-                        color='#222', clip_on=True)
+            # original number — always shown, zero in brackets, grey
+            txt_o   = f"{ov:.2f}" if ov >= 0.01 else f"({ov:.2e})"
+            o_color = '#222' if ov > 1e-6 else '#888'
+            x_o     = max(ov, vmax * 0.02) + vmax * 0.02
+            ax.text(x_o, yi - h/2,
+                    txt_o, va='center', ha='left', fontsize=6,
+                    color=o_color, clip_on=True)
+            # noisy value in noisy bar row:
+            #   positive → at bar end
+            #   zero/negative → at same x as positive would be (after name),
+            #     shown in brackets to signal perturbation without overlapping image
+            txt_n = f"{nv:.2f}" if nv >= 0.01 else f"({nv:.2e})"
+            n_color = '#222' if nv > 1e-6 else '#888'
+            x_n = max(nv, vmax * 0.02) + vmax * 0.02   # always right of bar area
+            ax.text(x_n, yi + h/2,
+                    txt_n, va='center', ha='left', fontsize=6,
+                    color=n_color, clip_on=True)
 
         ax.set_xticks([])
         for sp in ax.spines.values():
