@@ -938,14 +938,18 @@ def save_sae_retrieval_figure(target_idx, cv_orig, cv_iso, cv_mani,
             idxs  = np.argsort(-ref)[:top_k_bars]
             order = np.argsort(ref[idxs])[::-1]
         else:
-            active = np.where(ref > 1e-6)[0]
-            if len(active) == 0:
-                ax.text(0.5, 0.5, 'no active concepts', ha='center', va='center',
-                        transform=ax.transAxes, fontsize=8)
-                ax.set_title(title, fontsize=6.5, pad=2)
-                ax.axis('off')
-                return
-            idxs  = active[np.argsort(ref[active])[:top_k_bars]]
+            # active = np.where(ref > 1e-6)[0]
+            # if len(active) == 0:
+            #     ax.text(0.5, 0.5, 'no active concepts', ha='center', va='center',
+            #             transform=ax.transAxes, fontsize=8)
+            #     ax.set_title(title, fontsize=6.5, pad=2)
+            #     ax.axis('off')
+            #     return
+            # idxs  = active[np.argsort(ref[active])[:top_k_bars]]
+            # least: bottom-k from ALL 8192 — no active-only filter
+            # zeros compete too, showing concepts silent in original
+            # that get activated by noise
+            idxs  = np.argsort(ref)[:top_k_bars]
             order = np.argsort(ref[idxs])
 
         orig_vals  = orig[idxs][order]
@@ -964,10 +968,11 @@ def save_sae_retrieval_figure(target_idx, cv_orig, cv_iso, cv_mani,
         ax.set_xlim(0, xmax)
 
         for yi, (name, ov, nv) in enumerate(zip(names, orig_vals, noisy_vals)):
-            # concept name inside green bar — white text
+            # concept name: white inside bar, dark if bar is zero/invisible
+            name_color = 'white' if ov > vmax * 0.05 else '#333'
             ax.text(vmax * 0.015, yi - h/2,
                     name, va='center', ha='left', fontsize=6.5,
-                    color='white', clip_on=True)
+                    color=name_color, clip_on=True)
             # original number: at end of green bar, above it
             txt_o = f"{ov:.2f}" if ov >= 0.01 else f"{ov:.2e}"
             ax.text(ov + vmax * 0.02, yi - h/2,
