@@ -974,15 +974,16 @@ def save_sae_retrieval_figure(target_idx, cv_orig, cv_iso, cv_mani,
                     name, va='center', ha='left', fontsize=6.5,
                     color=name_color, clip_on=True)
             # original number: at end of green bar, above it
-            txt_o = f"{ov:.2f}" if ov >= 0.01 else f"{ov:.2e}"
-            ax.text(ov + vmax * 0.02, yi - h/2,
-                    txt_o, va='center', ha='left', fontsize=6,
-                    color='#222', clip_on=True)
-            # noisy number: at end of noisy bar, below it — only if meaningfully different
-            txt_n = f"{nv:.2f}" if nv >= 0.01 else f"{nv:.2e}"
-            ax.text(nv + vmax * 0.02, yi + h/2,
-                    txt_n, va='center', ha='left', fontsize=6,
-                    color='#222', clip_on=True)
+            if ov > 1e-6:   # hide zero original values
+                txt_o = f"{ov:.2f}" if ov >= 0.01 else f"{ov:.2e}"
+                ax.text(ov + vmax * 0.02, yi - h/2,
+                        txt_o, va='center', ha='left', fontsize=6,
+                        color='#222', clip_on=True)
+            if nv > 1e-6:   # hide zero noisy values
+                txt_n = f"{nv:.2f}" if nv >= 0.01 else f"{nv:.2e}"
+                ax.text(nv + vmax * 0.02, yi + h/2,
+                        txt_n, va='center', ha='left', fontsize=6,
+                        color='#222', clip_on=True)
 
         ax.set_xticks([])
         for sp in ax.spines.values():
