@@ -104,7 +104,10 @@ PROBE_CONFIG = "lr0.0001_bs512_epo50_clCE_spL1_spl0.0max_no_threshold"
 
 # Smoothing parameters
 K_NEIGHBORS = 500
-SCALE_WEIGHT = float(os.environ.get('CFM_SIGMA', '0.7'))  # supports multi-sigma via env
+SCALE_WEIGHT  = float(os.environ.get('CFM_SIGMA', '0.7'))  # supports multi-sigma via env
+# Alpha scaling: True → alpha = sigma/sqrt(lambda_max)  (original behaviour)
+#               False → alpha = sigma  (no scaling — noise magnitude = sigma directly)
+ALPHA_SCALING = os.environ.get('CFM_ALPHA_SCALING', '1').strip().lower() not in {'0', 'false', 'no'}
 N0_SMOOTH_SAMPLES = int(os.environ.get('CFM_N0_SAMPLES', '50'))   # paper stage-1 class selection
 N_SMOOTH_SAMPLES = int(os.environ.get('CFM_N_SAMPLES', '500'))  # supports multi-N via env
 N_TARGETS = 500           # number of val images to certify
@@ -1345,8 +1348,7 @@ if VIZ_ONLY:
         cv_smoothed_accum = np.zeros_like(cv_orig)
         for _ in range(N_SMOOTH_SAMPLES):
             _noise = np.random.normal(0, alpha, size=len(ev))
-            _cv_n  = cv_whitened + _noise
-            cv_smoothed_accum += _cv_n @ (np.sqrt(ev)[:, None] * Vt) + mean_nn
+            cv_smoothed_accum += cv_orig + _noise @ (np.sqrt(ev)[:, None] * Vt)
         cv_smoothed_avg = cv_smoothed_accum / N_SMOOTH_SAMPLES
 
         cv_gauss_accum = np.zeros_like(cv_orig)
@@ -1360,7 +1362,7 @@ if VIZ_ONLY:
         vis_noisy_preds  = []
         for _ in range(N_SMOOTH_SAMPLES):
             _noise = np.random.normal(0, alpha, size=len(ev))
-            _cv_s  = (cv_whitened + _noise) @ (np.sqrt(ev)[:, None] * Vt) + mean_nn
+            _cv_s  = cv_orig + _noise @ (np.sqrt(ev)[:, None] * Vt)
             vis_noisy_points.append(_cv_s)
             vis_noisy_preds.append(classify_concept_vector(
                 torch.tensor(_cv_s, dtype=torch.float32, device=args.device),
@@ -1657,7 +1659,8 @@ if VIZ_ONLY:
 
         # ── SAE-space retrieval + match grid figures ─────────────────────────
         if probe_val_dataset is not None:
-            cv_noisy_m = (cv_whitened + np.random.normal(0, alpha, size=len(ev))) @ (np.sqrt(ev)[:, None] * Vt) + mean_nn
+            _n = np.random.normal(0, alpha, size=len(ev))
+            cv_noisy_m = cv_orig + _n @ (np.sqrt(ev)[:, None] * Vt)
             cv_noisy_g = cv_orig + np.random.normal(0, gauss_sigma, size=cv_orig.shape)
             save_sae_retrieval_figure(
                 target_idx, cv_orig, cv_noisy_g, cv_noisy_m,
@@ -1727,20 +1730,20 @@ for loop_i, target_idx in enumerate(TARGET_IDCS if not VIZ_ONLY else []):
     # Whiten original (subtract local mean before projecting — supervisor change)
     cv_whitened = (cv_orig - mean_nn) @ Vt.T / np.sqrt(ev)
 
-    # Noise scale: alpha = sigma / sqrt(lambda_max)  (supervisor change)
-    # In whitened space we add N(0, alpha^2 I); this maps to pixel-space std
-    # sigma * sqrt(ev_norm_i) along each PC — ellipse matches the circle at PC1.
+    # Noise scale in whitened space
+    # ALPHA_SCALING=True  → alpha = sigma/sqrt(lambda_max)  (ellipse scaled to manifold)
+    # ALPHA_SCALING=False → alpha = sigma                   (raw sigma, no scaling)
     lambda_max = float(ev[0])
     sqrt_lambda_max = float(np.sqrt(max(lambda_max, 1e-12)))
-    alpha = SCALE_WEIGHT / sqrt_lambda_max
-    print(f"  [PCA] λ_max={lambda_max:.6f}  √λ_max={sqrt_lambda_max:.6f}  α=σ/√λ_max={alpha:.6f}  (σ={SCALE_WEIGHT})", flush=True)
+    alpha = SCALE_WEIGHT / sqrt_lambda_max if ALPHA_SCALING else SCALE_WEIGHT
+    print(f"  [PCA] λ_max={lambda_max:.6f}  √λ_max={sqrt_lambda_max:.6f}  "
+          f"α={'σ/√λ_max' if ALPHA_SCALING else 'σ(no scaling)'}={alpha:.6f}  (σ={SCALE_WEIGHT})", flush=True)
 
     # Stage 1 (n0) — choose the class to certify, paper-style
     class_counts_n0 = np.zeros(N_CLASSES, dtype=np.int64)
     for _ in range(N0_SMOOTH_SAMPLES):
         noise = np.random.normal(0, alpha, size=len(ev))
-        cv_noised = cv_whitened + noise
-        cv_stage0 = cv_noised @ (np.sqrt(ev)[:, None] * Vt) + mean_nn
+        cv_stage0 = cv_orig + noise @ (np.sqrt(ev)[:, None] * Vt)
         pred_stage0 = classify_concept_vector(
             torch.tensor(cv_stage0, dtype=torch.float32, device=args.device),
             classifier_weights)
@@ -1766,8 +1769,10 @@ for loop_i, target_idx in enumerate(TARGET_IDCS if not VIZ_ONLY else []):
 
     for sample_i in range(N_SMOOTH_SAMPLES):
         noise = np.random.normal(0, alpha, size=len(ev))
-        cv_noised = cv_whitened + noise
-        cv_smoothed = cv_noised @ (np.sqrt(ev)[:, None] * Vt) + mean_nn
+        # Pure noise in original space, added to ORIGINAL anchor (no mean reconstruction)
+        # Matches other project: noise_orig = (noise * sqrt(ev)) @ Vt; return anchor + noise_orig
+        noise_orig  = noise @ (np.sqrt(ev)[:, None] * Vt)
+        cv_smoothed = cv_orig + noise_orig
 
         # Record activation of each original top-K concept in this smooth sample
         for cidx in orig_top_idxs:
@@ -1839,8 +1844,7 @@ for loop_i, target_idx in enumerate(TARGET_IDCS if not VIZ_ONLY else []):
     cv_smoothed_accum = np.zeros_like(cv_orig)
     for _ in range(N_SMOOTH_SAMPLES):
         noise = np.random.normal(0, alpha, size=len(ev))
-        cv_noised = cv_whitened + noise
-        cv_smoothed_accum += cv_noised @ (np.sqrt(ev)[:, None] * Vt) + mean_nn
+        cv_smoothed_accum += cv_orig + noise @ (np.sqrt(ev)[:, None] * Vt)
     cv_smoothed_avg = cv_smoothed_accum / N_SMOOTH_SAMPLES
     final_concepts = get_top_concept_info(cv_smoothed_avg, concept_names, top_k=20)
 
@@ -2028,8 +2032,7 @@ for loop_i, target_idx in enumerate(TARGET_IDCS if not VIZ_ONLY else []):
         vis_noisy_preds = []
         for _ in range(N_SMOOTH_SAMPLES):
             noise = np.random.normal(0, alpha, size=len(ev))
-            cv_noised = cv_whitened + noise
-            cv_s = cv_noised @ (np.sqrt(ev)[:, None] * Vt) + mean_nn
+            cv_s = cv_orig + noise @ (np.sqrt(ev)[:, None] * Vt)
             vis_noisy_points.append(cv_s)
             p = classify_concept_vector(
                 torch.tensor(cv_s, dtype=torch.float32, device=args.device),
@@ -2264,8 +2267,8 @@ for loop_i, target_idx in enumerate(TARGET_IDCS if not VIZ_ONLY else []):
 
         # SAE-space retrieval + match grid figures
         if probe_val_dataset is not None:
-            cv_noisy_m_ex = cv_whitened + np.random.normal(0, alpha, size=len(ev))
-            cv_noisy_m_ex = cv_noisy_m_ex @ (np.sqrt(ev)[:, None] * Vt) + mean_nn
+            _n_ex         = np.random.normal(0, alpha, size=len(ev))
+            cv_noisy_m_ex = cv_orig + _n_ex @ (np.sqrt(ev)[:, None] * Vt)
             cv_noisy_g_ex = cv_orig + np.random.normal(0, gauss_sigma, size=cv_orig.shape)
             save_sae_retrieval_figure(
                 target_idx, cv_orig, cv_noisy_g_ex, cv_noisy_m_ex,
